@@ -434,13 +434,18 @@ def get_position_pnl(ticket: int) -> dict | None:
 
 @dataclass
 class FTMOState:
-    """Rastrea límites FTMO en tiempo real."""
+    """Rastrea límites FTMO y límite diario conservador en tiempo real.
 
-    initial_balance:  float
-    currency:         str   = "EUR"
-    daily_limit_pct:  float = 0.03
-    max_loss_pct:     float = 0.10
-    start_equity:     float | None = None
+    Dos capas de protección:
+      1. daily_limit_eur  — límite diario PROPIO (más conservador, default 100 EUR)
+      2. max_loss_floor   — suelo FTMO 10% del balance original (9 000 EUR sobre 10 k)
+    """
+
+    initial_balance:   float
+    currency:          str   = "EUR"
+    daily_limit_eur:   float = 100.0   # límite diario en EUR absolutos
+    max_loss_pct:      float = 0.10    # suelo FTMO: 90% del balance inicial
+    start_equity:      float | None = None
 
     daily_start_balance: float = field(init=False)
     _trading_day:        date  = field(init=False)
@@ -455,7 +460,8 @@ class FTMOState:
 
     @property
     def daily_limit(self) -> float:
-        return round(self.initial_balance * self.daily_limit_pct, 2)
+        """Alias para compatibilidad — devuelve daily_limit_eur."""
+        return round(self.daily_limit_eur, 2)
 
     @property
     def max_loss_floor(self) -> float:
@@ -466,18 +472,24 @@ class FTMOState:
             return False
         today = date.today()
         if today != self._trading_day:
+            # Nuevo día: resetear seguimiento diario
             self._trading_day        = today
             self.daily_start_balance = equity
-            logger.info(f"Nuevo día de trading. Equity inicio: {equity:,.2f} {self.currency}")
+            self.blocked             = False
+            self.block_reason        = ""
+            logger.info(
+                f"Nuevo día de trading. Equity inicio: {equity:,.2f} {self.currency}  |  "
+                f"Límite diario: -{self.daily_limit_eur:,.0f} {self.currency}"
+            )
 
         daily_loss = self.daily_start_balance - equity
-        if daily_loss >= self.daily_limit:
+        if daily_loss >= self.daily_limit_eur:
             self.blocked      = True
             self.block_reason = (
-                f"Límite diario: -{daily_loss:,.2f} {self.currency} "
-                f"(límite: {self.daily_limit:,.2f})"
+                f"Límite diario propio: -{daily_loss:,.2f} {self.currency} "
+                f"(stop: {self.daily_limit_eur:,.0f} {self.currency})"
             )
-            logger.error(f"⛔ BLOQUEO DIARIO — {self.block_reason}")
+            logger.error(f"⛔ STOP DIARIO — {self.block_reason}")
             return False
 
         if equity <= self.max_loss_floor:
@@ -487,18 +499,21 @@ class FTMOState:
                 f"Drawdown FTMO: {equity:,.2f} ≤ suelo {self.max_loss_floor:,.2f} "
                 f"({overall:.1f}% pérdida total)"
             )
-            logger.error(f"⛔ BLOQUEO DRAWDOWN — {self.block_reason}")
+            logger.error(f"⛔ BLOQUEO DRAWDOWN FTMO — {self.block_reason}")
             return False
 
         return True
 
+    def daily_pnl(self, equity: float) -> float:
+        return round(equity - self.daily_start_balance, 2)
+
     def status_line(self, equity: float) -> str:
-        daily_pnl    = equity - self.daily_start_balance
+        pnl          = self.daily_pnl(equity)
         overall_dd   = (self.initial_balance - equity) / self.initial_balance * 100
-        daily_margin = self.daily_limit - max(0.0, self.daily_start_balance - equity)
+        remaining    = self.daily_limit_eur - max(0.0, self.daily_start_balance - equity)
         return (
             f"Equity: {equity:,.2f} {self.currency}  |  "
-            f"Day P&L: {daily_pnl:+,.2f} (margen: {daily_margin:,.0f})  |  "
+            f"Day P&L: {pnl:+,.2f} (resto: {remaining:,.0f})  |  "
             f"DD total: {overall_dd:.2f}%  |  "
             f"Suelo FTMO: {self.max_loss_floor:,.2f}"
         )

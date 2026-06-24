@@ -57,10 +57,13 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--ob-lookback", type=int, default=10, dest="ob_lookback")
 
     g = p.add_argument_group("Cuenta")
-    g.add_argument("--balance",     type=float, default=None)
-    g.add_argument("--currency",    type=str,   default="EUR")
-    g.add_argument("--risk-pct",    type=float, default=1.0,  dest="risk_pct")
-    g.add_argument("--daily-limit", type=float, default=None, dest="daily_limit_pct")
+    g.add_argument("--balance",         type=float, default=None,
+                   help="Balance inicial FTMO (siempre 10000 para calcular suelo correcto)")
+    g.add_argument("--currency",        type=str,   default="EUR")
+    g.add_argument("--risk-pct",        type=float, default=0.5,  dest="risk_pct",
+                   help="Riesgo por operación en %% del balance (default: 0.5)")
+    g.add_argument("--daily-limit-eur", type=float, default=100.0, dest="daily_limit_eur",
+                   help="Pérdida diaria máxima en EUR antes de bloquear (default: 100)")
 
     g = p.add_argument_group("Ejecución")
     g.add_argument("--interval",          type=int, default=60)
@@ -71,6 +74,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Bloquea nuevas entradas si hay noticias rojas en Forex Factory")
     g.add_argument("--news-buffer-mins",  type=int, default=30, dest="news_buffer",
                    help="Minutos de margen antes/después de una noticia (default: 30)")
+    g.add_argument("--dashboard-port",   type=int, default=8765, dest="dashboard_port",
+                   help="Puerto del dashboard web (0 = desactivado, default: 8765)")
 
     g = p.add_argument_group("MT5")
     g.add_argument("--mt5-login",    type=int, default=0)
@@ -166,12 +171,13 @@ def main() -> None:
 
     from backtest.data     import download_multi_tf_chain
     from backtest.detector import detect_signals_chain, DEFAULT_MTF_PARAMS, MINTICKS
-    from backtest.live     import (
+    from backtest.live      import (
         FTMOState, get_lot_size, get_open_positions, place_market_order,
         is_trading_hours, SESSIONS_UTC,
         generate_trade_chart, get_position_pnl,
         fetch_ff_events, is_news_blackout, _SYMBOL_CURRENCIES,
     )
+    from backtest.dashboard import start_dashboard, update_state, push_log
 
     # ── Mostrar sesiones en hora España ──────────────────────────────────
     logger.info("Sesiones activas (UTC | España verano CEST | España invierno CET):")
@@ -207,16 +213,35 @@ def main() -> None:
     logger.info(f"MT5 conectado  |  {acc.server}  |  Login: {acc.login}")
     logger.info(f"Balance: {balance:,.2f} {currency}  |  Equity: {acc.equity:,.2f}")
 
+    # ── Dashboard web ────────────────────────────────────────────────────
+    if args.dashboard_port > 0:
+        start_dashboard(port=args.dashboard_port)
+        logger.info(f"Dashboard en  http://localhost:{args.dashboard_port}/")
+        update_state(
+            symbol          = symbol,
+            tf_chain        = "→".join(args.tf_chain),
+            initial_balance = balance,
+            ftmo_floor      = round(balance * 0.90, 2),
+            daily_limit_eur = args.daily_limit_eur,
+            min_score       = args.min_score,
+            dry_run         = args.dry_run,
+            balance         = acc.balance,
+            equity          = acc.equity,
+            daily_start_eq  = acc.equity,
+            status          = "iniciando",
+        )
+
     # ── FTMO Guard ────────────────────────────────────────────────────────
     ftmo = FTMOState(
-        initial_balance = balance,
-        currency        = currency,
-        daily_limit_pct = (args.daily_limit_pct / 100.0 if args.daily_limit_pct else 0.03),
-        start_equity    = acc.equity,
+        initial_balance  = balance,
+        currency         = currency,
+        daily_limit_eur  = args.daily_limit_eur,
+        start_equity     = acc.equity,
     )
     logger.info(
-        f"FTMO límites — diario: -{ftmo.daily_limit:,.2f} {currency}  |  "
-        f"Suelo DD: {ftmo.max_loss_floor:,.2f} {currency}"
+        f"FTMO límites — stop diario: -{ftmo.daily_limit:,.0f} {currency}  |  "
+        f"Suelo DD (FTMO): {ftmo.max_loss_floor:,.0f} {currency}  |  "
+        f"Riesgo/op: {args.risk_pct}%"
     )
 
     _notify(tg_token, tg_chat_id,
@@ -240,8 +265,9 @@ def main() -> None:
     last_off_hours = False
     cycle         = 0
 
-    # Tracking de posiciones abiertas por este bot {ticket: snap_dict}
+    # Tracking de posiciones abiertas y operaciones cerradas
     pos_snapshots: dict[int, dict] = {}
+    recent_trades:  list[dict]     = []   # últimas 10 operaciones (para dashboard)
 
     # ── Forex Factory calendar ────────────────────────────────────────────
     ff_events:    list = []
@@ -271,12 +297,33 @@ def main() -> None:
                 mt5.initialize(**mt5_kwargs)
                 continue
 
-            equity = acc.equity
+            equity     = acc.equity
+            daily_pnl  = ftmo.daily_pnl(equity)
+
+            # Actualizar dashboard — métricas de cuenta
+            update_state(
+                balance       = acc.balance,
+                equity        = equity,
+                daily_pnl     = daily_pnl,
+                cycle         = cycle,
+                open_positions= [
+                    {"ticket": p.ticket, "symbol": p.symbol,
+                     "dir": "LONG" if p.type == 0 else "SHORT",
+                     "lot": p.volume, "entry": p.price_open,
+                     "sl": p.sl, "tp": p.tp, "pnl": p.profit}
+                    for p in get_open_positions(symbol)
+                ],
+            )
 
             # ── 2. Filtro de sesión ───────────────────────────────────────
+            now_utc = datetime.now(timezone.utc)
             if not args.no_session_filter:
-                now_utc              = datetime.now(timezone.utc)
                 in_session, sess_name = is_trading_hours(now_utc)
+                update_state(
+                    session    = sess_name,
+                    in_session = in_session,
+                    status     = "operativo" if in_session else "fuera_sesion",
+                )
                 if not in_session:
                     if not last_off_hours:
                         hora_esp = datetime.now().strftime("%H:%M")
@@ -285,6 +332,7 @@ def main() -> None:
                             f"UTC: {now_utc.strftime('%H:%M')}  |  "
                             f"España: {hora_esp}  |  Bot inactivo"
                         )
+                        push_log(f"Fuera de sesión ({sess_name}) — bot inactivo")
                         last_off_hours = True
                     time.sleep(args.interval)
                     continue
@@ -301,17 +349,46 @@ def main() -> None:
                         )
                     last_off_hours = False
 
-            # ── 3. Refresco diario del calendario FF ─────────────────────
-            if args.use_ff and ff_last_fetch != date.today():
-                logger.info("Refrescando calendario Forex Factory (nuevo día)...")
-                ff_events     = fetch_ff_events(ff_currencies)
-                ff_last_fetch = date.today()
-                logger.info(f"  {len(ff_events)} noticias rojas cargadas")
+            # ── 3. Refresco diario del calendario FF + estado noticias ──
+            if args.use_ff:
+                if ff_last_fetch != date.today():
+                    logger.info("Refrescando calendario Forex Factory (nuevo día)...")
+                    ff_events     = fetch_ff_events(ff_currencies)
+                    ff_last_fetch = date.today()
+                    logger.info(f"  {len(ff_events)} noticias rojas cargadas")
+
+                # Calcular estado de noticias para el dashboard en cada ciclo
+                _blocked_now, _reason_now = is_news_blackout(ff_events, now_utc, args.news_buffer)
+                _warn_now,    _reason_w   = is_news_blackout(ff_events, now_utc, args.news_buffer * 2)
+                _next_title, _next_mins   = "", None
+                for _ev in ff_events:
+                    try:
+                        _dt = datetime.fromisoformat(_ev["date"])
+                        if _dt.tzinfo:
+                            _dt = _dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+                        else:
+                            _dt = _dt.replace(tzinfo=timezone.utc)
+                        _m = (_dt - now_utc).total_seconds() / 60
+                        if _m >= 0 and (_next_mins is None or _m < _next_mins):
+                            _next_mins  = int(_m)
+                            _next_title = _ev.get("title", "")
+                    except Exception:
+                        pass
+                _news_st = "blocked" if _blocked_now else ("warning" if _warn_now else "ok")
+                update_state(
+                    news_status    = _news_st,
+                    next_news_title= _next_title,
+                    next_news_mins = _next_mins,
+                )
+            else:
+                update_state(news_status="none")
 
             # ── 4. FTMO check ─────────────────────────────────────────────
             if not ftmo.check(equity):
+                update_state(status="bloqueado")
                 _notify(tg_token, tg_chat_id, f"*⛔ BLOQUEADO:* {ftmo.block_reason}")
                 logger.error(f"⛔ TRADING BLOQUEADO: {ftmo.block_reason}")
+                push_log(f"BLOQUEADO — {ftmo.block_reason}")
                 time.sleep(60)
                 continue
 
@@ -403,6 +480,20 @@ def main() -> None:
 
                     del pos_snapshots[ticket]
 
+                    # Registrar en historial del dashboard
+                    hora_close = (close_time or datetime.now(timezone.utc)).strftime("%H:%M")
+                    recent_trades.append({
+                        "time":   hora_close,
+                        "symbol": symbol,
+                        "dir":    snap["direction"],
+                        "pnl":    round(pnl, 2) if pnl is not None else None,
+                        "motivo": motivo,
+                    })
+                    if len(recent_trades) > 10:
+                        recent_trades.pop(0)
+                    update_state(recent_trades=list(recent_trades))
+                    push_log(f"CERRADA #{ticket} {snap['direction']} {motivo}  P&L={pnl_str}")
+
             # ── 6. Nueva vela cerrada ─────────────────────────────────────
             completed_time = df["time"].iloc[-2]
             if completed_time == last_bar_time:
@@ -427,6 +518,8 @@ def main() -> None:
             score_bear = int(last_sig["score_bear"])
 
             logger.info(f"Señal — LONG={score_bull}  SHORT={score_bear}  (umbral: {args.min_score})")
+            update_state(score_bull=score_bull, score_bear=score_bear)
+            push_log(f"Vela {entry_tf} {completed_time.strftime('%H:%M')}  LONG={score_bull}  SHORT={score_bear}")
 
             # ── 8. Filtro posición abierta ────────────────────────────────
             open_pos = get_open_positions(symbol)
@@ -449,12 +542,18 @@ def main() -> None:
             elif score_bull >= args.min_score:
                 direction, active_score = "LONG", score_bull
 
+            update_state(
+                last_signal_dir = direction,
+                status          = "sin_señal" if direction is None else "operativo",
+            )
+
             if direction is None:
                 logger.info(f"Sin señal válida (LONG={score_bull}, SHORT={score_bear} < {args.min_score})")
                 time.sleep(args.interval)
                 continue
 
             logger.info(f"SEÑAL {direction}  score={active_score}/7")
+            push_log(f"SEÑAL {direction}  score={active_score}/7  — evaluando entrada")
 
             # ── 10. Filtro Forex Factory ──────────────────────────────────
             if args.use_ff and ff_events:
@@ -507,6 +606,8 @@ def main() -> None:
                 tipo   = "VENTA (SHORT)" if direction == "SHORT" else "COMPRA (LONG)"
 
                 logger.info(f"ORDEN ABIERTA #{ticket}  {direction}  @ {price}  SL={sl_val}  TP={tp_val}")
+                push_log(f"ABIERTA #{ticket} {direction} @ {price}  SL={sl_val}  TP={tp_val}")
+                update_state(status="operativo", last_signal_dir=direction)
 
                 # Guardar snapshot para detectar el cierre después
                 pos_snapshots[ticket] = {
