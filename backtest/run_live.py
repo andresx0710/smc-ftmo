@@ -142,8 +142,66 @@ def _notify_photo(token: str, chat_id: str, chart: bytes, caption: str) -> None:
 
 # ── Main ───────────────────────────────────────────────────────────────────────
 
+def _apply_cloud_config(args) -> None:
+    """Descarga la config del cloud y rellena los args que no se pasaron explícitamente."""
+    url   = (args.cloud_url   or os.environ.get("CLOUD_URL",   "")).rstrip("/")
+    token = (args.cloud_token or os.environ.get("CLOUD_TOKEN", ""))
+    if not (url and token):
+        return
+
+    import json as _json, urllib.request as _req
+    try:
+        r = _req.Request(f"{url}/config", headers={"Authorization": f"Bearer {token}"})
+        with _req.urlopen(r, timeout=10) as resp:
+            cfg = _json.loads(resp.read())
+        logger.info(f"Config cargada desde cloud: {url}")
+    except Exception as e:
+        logger.warning(f"No se pudo cargar config cloud ({e}) — usando args locales")
+        return
+
+    # Solo aplica valores de la nube cuando el arg está en su valor por defecto / None
+    def _apply(attr: str, key: str, cast=str):
+        if getattr(args, attr, None) in (None, "", 0, False):
+            v = cfg.get(key)
+            if v not in (None, "", 0):
+                try:
+                    setattr(args, attr, cast(v))
+                except Exception:
+                    pass
+
+    _apply("symbol",           "symbol")
+    _apply("min_score",        "min_score",        int)
+    _apply("sl_pips",          "sl_pips",          float)
+    _apply("rr",               "rr",               float)
+    _apply("risk_pct",         "risk_pct",         float)
+    _apply("daily_limit_eur",  "daily_limit_eur",  float)
+    _apply("balance",          "balance",          float)
+    _apply("currency",         "currency")
+    _apply("news_buffer",      "news_buffer_mins", int)
+    _apply("mt5_login",        "mt5_login",        int)
+    _apply("mt5_password",     "mt5_password")
+    _apply("mt5_server",       "mt5_server")
+    _apply("mt5_path",         "mt5_path")
+    _apply("tg_token",         "tg_token")
+    _apply("tg_chat_id",       "tg_chat_id")
+
+    # tf_chain: si aún está en el default ['D1','H1','M15','M5'] y cloud lo tiene distinto
+    tf_cloud = cfg.get("tf_chain", [])
+    if tf_cloud and isinstance(tf_cloud, list) and args.tf_chain == ["D1", "H1", "M15", "M5"]:
+        args.tf_chain = tf_cloud
+
+    # Flags booleanos (cloud los envía como bool)
+    if not args.use_ff and cfg.get("use_ff"):
+        args.use_ff = True
+    if not args.only_short and cfg.get("only_short"):
+        args.only_short = True
+    if not args.only_long and cfg.get("only_long"):
+        args.only_long = True
+
+
 def main() -> None:
     args   = _parse_args()
+    _apply_cloud_config(args)     # rellena desde cloud lo que no vino por CLI
     symbol = args.symbol.upper()
 
     tf_chain    = [tf.upper() for tf in args.tf_chain]

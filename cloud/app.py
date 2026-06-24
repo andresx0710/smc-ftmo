@@ -21,12 +21,17 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import FastAPI, Request, HTTPException, Query
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+
+from cloud.db import (
+    load_config, save_config, config_exists,
+    backend_name, encryption_active, _fernet,
+)
 
 # ── Configuración ──────────────────────────────────────────────────────────────
 
 PUSH_TOKEN   = os.environ.get("PUSH_TOKEN",   "change-me-push-token")
-ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")   # vacío = sin auth en dashboard
+ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "")
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -86,10 +91,294 @@ async def get_state(key: str = Query(default="")) -> JSONResponse:
     return JSONResponse(_state)
 
 
+@app.get("/config")
+async def get_config(request: Request) -> JSONResponse:
+    """El bot local llama aquí al arrancar para obtener su configuración completa."""
+    auth = request.headers.get("Authorization", "")
+    if not auth.startswith("Bearer ") or auth[7:] != PUSH_TOKEN:
+        raise HTTPException(status_code=401, detail="Token inválido")
+    cfg = load_config()
+    if cfg is None:
+        raise HTTPException(status_code=404, detail="Configuración no encontrada — usa /setup")
+    return JSONResponse(cfg)
+
+
+@app.get("/setup", response_class=HTMLResponse)
+async def setup_form(key: str = Query(default="")) -> HTMLResponse:
+    """Formulario de configuración del bot (protegido por ACCESS_TOKEN)."""
+    if ACCESS_TOKEN and key != ACCESS_TOKEN:
+        return HTMLResponse(_ACCESS_DENIED, status_code=401)
+    cfg  = load_config() or {}
+    warn = "" if encryption_active() else (
+        "<div class='warn'>⚠ SECRET_KEY no configurado — las credenciales se guardan sin cifrar. "
+        "Genera una clave y añádela como variable de entorno.</div>"
+    )
+    db_info = f"Base de datos: <strong>{backend_name()}</strong>"
+    return HTMLResponse(_setup_html(cfg, warn, db_info, key))
+
+
+@app.post("/setup")
+async def save_setup(request: Request, key: str = Query(default="")) -> HTMLResponse:
+    """Guarda la configuración enviada por el formulario."""
+    if ACCESS_TOKEN and key != ACCESS_TOKEN:
+        raise HTTPException(status_code=401, detail="Acceso denegado")
+
+    form = await request.form()
+    existing = load_config() or {}
+
+    def _fval(name: str, default: Any = "") -> Any:
+        return form.get(name, existing.get(name, default))
+
+    # Campos de contraseña: si el usuario los dejó en blanco, conservar el valor anterior
+    def _secret(name: str) -> str:
+        v = form.get(name, "").strip()
+        return v if v else existing.get(name, "")
+
+    cfg = {
+        "mt5_login":        _fval("mt5_login", ""),
+        "mt5_password":     _secret("mt5_password"),
+        "mt5_server":       _fval("mt5_server", ""),
+        "mt5_path":         _fval("mt5_path", ""),
+        "tg_token":         _secret("tg_token"),
+        "tg_chat_id":       _fval("tg_chat_id", ""),
+        "symbol":           _fval("symbol", "EURUSD"),
+        "tf_chain":         _fval("tf_chain", "D1,H1,M15,M5"),
+        "min_score":        int(_fval("min_score", 5)),
+        "sl_pips":          float(_fval("sl_pips", 20.0)),
+        "rr":               float(_fval("rr", 3.0)),
+        "risk_pct":         float(_fval("risk_pct", 0.5)),
+        "daily_limit_eur":  float(_fval("daily_limit_eur", 100.0)),
+        "balance":          float(_fval("balance", 10000.0)),
+        "currency":         _fval("currency", "EUR"),
+        "use_ff":           1 if form.get("use_ff") else 0,
+        "news_buffer_mins": int(_fval("news_buffer_mins", 60)),
+        "only_short":       1 if form.get("only_short") else 0,
+        "only_long":        1 if form.get("only_long")  else 0,
+    }
+
+    try:
+        save_config(cfg)
+    except Exception as e:
+        return HTMLResponse(
+            _setup_html(cfg, f"<div class='err'>❌ Error guardando: {e}</div>",
+                        f"Base de datos: {backend_name()}", key)
+        )
+
+    return HTMLResponse(
+        _setup_html(cfg, "<div class='ok'>✅ Configuración guardada correctamente.</div>",
+                    f"Base de datos: {backend_name()}", key)
+    )
+
+
 @app.get("/", response_class=HTMLResponse)
-async def dashboard() -> HTMLResponse:
-    """Sirve el panel. La auth se realiza en el cliente vía ?key=..."""
+async def dashboard(key: str = Query(default="")) -> HTMLResponse:
+    """Panel principal. Redirige a /setup si no hay configuración."""
+    if not config_exists():
+        return RedirectResponse(url=f"/setup?key={key}")
     return HTMLResponse(_HTML)
+
+
+# ── HTML: Access Denied ───────────────────────────────────────────────────────
+
+_ACCESS_DENIED = """<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><title>SMC-FTMO</title>
+<style>body{background:#0a0e1a;color:#f9fafb;font-family:system-ui,sans-serif;
+display:flex;align-items:center;justify-content:center;min-height:100vh;flex-direction:column;gap:1rem;}
+h1{color:#ef4444;}p{color:#6b7280;max-width:360px;text-align:center;}
+input{background:#111827;border:1px solid #1f2937;color:#f9fafb;padding:.6rem 1rem;
+border-radius:8px;font-size:.875rem;width:280px;outline:none;}
+button{background:#10b981;color:#fff;border:none;border-radius:8px;padding:.6rem 1.5rem;
+cursor:pointer;font-weight:600;}</style></head>
+<body><h1>🔒 Acceso restringido</h1>
+<p>Introduce la clave de acceso o usa el enlace completo.</p>
+<input type="password" id="k" placeholder="ACCESS_TOKEN..." onkeydown="if(event.key==='Enter')go()">
+<button onclick="go()">Acceder</button>
+<script>function go(){const k=document.getElementById('k').value.trim();
+if(k)window.location.href='/setup?key='+encodeURIComponent(k);}</script>
+</body></html>"""
+
+
+# ── HTML: Setup form (generado dinámicamente) ─────────────────────────────────
+
+def _setup_html(cfg: dict, banner: str, db_info: str, key: str) -> str:
+    tf = cfg.get("tf_chain", "D1,H1,M15,M5")
+    if isinstance(tf, list):
+        tf = ",".join(tf)
+
+    def _v(k: str, default: str = "") -> str:
+        return str(cfg.get(k, default)).replace('"', "&quot;")
+
+    def _checked(k: str) -> str:
+        return "checked" if cfg.get(k) else ""
+
+    symbols = ["EURUSD", "GBPUSD", "USDJPY", "XAUUSD", "NAS100", "BTCUSD"]
+    sym_opts = "".join(
+        f'<option value="{s}" {"selected" if _v("symbol","EURUSD")==s else ""}>{s}</option>'
+        for s in symbols
+    )
+
+    return f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMC-FTMO — Configuración</title>
+<style>
+*,*::before,*::after{{box-sizing:border-box;margin:0;padding:0}}
+:root{{--bg:#0a0e1a;--card:#111827;--border:#1f2937;--accent:#10b981;
+--red:#ef4444;--yellow:#f59e0b;--text:#f9fafb;--muted:#6b7280}}
+body{{background:var(--bg);color:var(--text);font-family:'Segoe UI',system-ui,sans-serif;
+font-size:.875rem;min-height:100vh;padding:1.5rem 1rem 3rem}}
+.wrap{{max-width:680px;margin:0 auto}}
+.logo{{font-size:1.25rem;font-weight:700;color:var(--accent);letter-spacing:.05em}}
+.subtitle{{color:var(--muted);font-size:.8rem;margin-top:.25rem;margin-bottom:1.5rem}}
+.db-tag{{background:var(--border);color:var(--muted);font-size:.7rem;padding:.2rem .5rem;
+border-radius:4px;margin-left:.5rem}}
+.card{{background:var(--card);border:1px solid var(--border);border-radius:10px;
+padding:1.25rem 1.5rem;margin-bottom:1rem}}
+.card-title{{font-size:.7rem;text-transform:uppercase;letter-spacing:.08em;
+color:var(--muted);margin-bottom:1rem;border-bottom:1px solid var(--border);padding-bottom:.5rem}}
+.grid{{display:grid;grid-template-columns:1fr 1fr;gap:.75rem}}
+@media(max-width:500px){{.grid{{grid-template-columns:1fr}}}}
+.field{{display:flex;flex-direction:column;gap:.35rem}}
+.field label{{font-size:.75rem;color:var(--muted)}}
+.field input,.field select{{background:#0d1420;border:1px solid var(--border);color:var(--text);
+padding:.55rem .8rem;border-radius:8px;font-size:.875rem;outline:none;transition:border .2s}}
+.field input:focus,.field select:focus{{border-color:var(--accent)}}
+.field .hint{{font-size:.68rem;color:var(--muted)}}
+.toggle-row{{display:flex;align-items:center;gap:.6rem;padding:.3rem 0}}
+.toggle-row label{{font-size:.8rem;color:var(--text);cursor:pointer}}
+input[type=checkbox]{{width:16px;height:16px;accent-color:var(--accent);cursor:pointer}}
+.btn{{background:var(--accent);color:#fff;border:none;border-radius:8px;
+padding:.7rem 2rem;font-size:.9rem;font-weight:600;cursor:pointer;width:100%;
+margin-top:1rem;transition:opacity .2s}}
+.btn:hover{{opacity:.85}}
+.btn-dash{{background:var(--border);color:var(--text);border:none;border-radius:8px;
+padding:.5rem 1.2rem;font-size:.8rem;cursor:pointer;margin-top:.5rem;width:100%}}
+.ok{{background:#064e3b;color:#6ee7b7;border:1px solid #10b981;border-radius:8px;
+padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem}}
+.warn{{background:#78350f;color:#fcd34d;border:1px solid #f59e0b;border-radius:8px;
+padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem}}
+.err{{background:#7f1d1d;color:#fca5a5;border:1px solid #ef4444;border-radius:8px;
+padding:.75rem 1rem;margin-bottom:1rem;font-size:.85rem}}
+</style></head>
+<body><div class="wrap">
+
+<div class="logo">SMC-FTMO <span class="db-tag">{db_info}</span></div>
+<div class="subtitle">Panel de configuración · <a href="/?key={key}" style="color:var(--accent)">Ver dashboard →</a></div>
+
+{banner}
+
+<form method="POST" action="/setup?key={key}">
+
+<div class="card">
+<div class="card-title">🖥 MetaTrader 5 — Credenciales de cuenta FTMO</div>
+<div class="grid">
+  <div class="field">
+    <label>Login MT5</label>
+    <input name="mt5_login" value="{_v('mt5_login')}" placeholder="531307202" required>
+  </div>
+  <div class="field">
+    <label>Contraseña MT5</label>
+    <input type="password" name="mt5_password" placeholder="•••• (dejar vacío = no cambiar)">
+    <span class="hint">Solo rellena si quieres cambiarla</span>
+  </div>
+  <div class="field">
+    <label>Servidor MT5</label>
+    <input name="mt5_server" value="{_v('mt5_server')}" placeholder="FTMO-Server3" required>
+  </div>
+  <div class="field">
+    <label>Ruta ejecutable MT5 (opcional)</label>
+    <input name="mt5_path" value="{_v('mt5_path')}" placeholder="C:\\Program Files\\...\\terminal64.exe">
+  </div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">📱 Telegram — Notificaciones en tiempo real</div>
+<div class="grid">
+  <div class="field">
+    <label>Bot Token</label>
+    <input type="password" name="tg_token" placeholder="•••• (dejar vacío = no cambiar)">
+    <span class="hint">Obtener en @BotFather → /newbot</span>
+  </div>
+  <div class="field">
+    <label>Chat ID</label>
+    <input name="tg_chat_id" value="{_v('tg_chat_id')}" placeholder="8259161831">
+    <span class="hint">Obtener con @userinfobot</span>
+  </div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">📊 Configuración de trading</div>
+<div class="grid">
+  <div class="field">
+    <label>Símbolo</label>
+    <select name="symbol">{sym_opts}</select>
+  </div>
+  <div class="field">
+    <label>Cadena de temporalidades (separado por comas)</label>
+    <input name="tf_chain" value="{tf}" placeholder="D1,H1,M15,M5">
+  </div>
+  <div class="field">
+    <label>Score mínimo SMC (1–7)</label>
+    <input type="number" name="min_score" value="{_v('min_score','5')}" min="1" max="7">
+  </div>
+  <div class="field">
+    <label>Stop Loss (pips)</label>
+    <input type="number" name="sl_pips" value="{_v('sl_pips','20.0')}" step="0.5" min="5">
+  </div>
+  <div class="field">
+    <label>Ratio RR (mínimo recomendado: 3.0)</label>
+    <input type="number" name="rr" value="{_v('rr','3.0')}" step="0.5" min="1">
+  </div>
+  <div class="field">
+    <label>Dirección</label>
+    <div class="toggle-row"><input type="checkbox" name="only_short" {_checked('only_short')}><label>Solo SHORT</label></div>
+    <div class="toggle-row"><input type="checkbox" name="only_long"  {_checked('only_long')} ><label>Solo LONG</label></div>
+  </div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">🛡 Gestión de riesgo FTMO</div>
+<div class="grid">
+  <div class="field">
+    <label>Balance inicial FTMO (siempre 10 000)</label>
+    <input type="number" name="balance" value="{_v('balance','10000')}" step="100">
+    <span class="hint">Nunca cambiarlo — es la referencia para calcular el suelo 9 000 EUR</span>
+  </div>
+  <div class="field">
+    <label>Riesgo por operación (%)</label>
+    <input type="number" name="risk_pct" value="{_v('risk_pct','0.5')}" step="0.1" min="0.1" max="3">
+  </div>
+  <div class="field">
+    <label>Stop diario propio (EUR)</label>
+    <input type="number" name="daily_limit_eur" value="{_v('daily_limit_eur','100')}" step="10" min="10">
+    <span class="hint">El bot se bloquea al alcanzar esta pérdida. Límite FTMO real: 300 EUR</span>
+  </div>
+  <div class="field">
+    <label>Divisa de la cuenta</label>
+    <input name="currency" value="{_v('currency','EUR')}" placeholder="EUR">
+  </div>
+</div>
+</div>
+
+<div class="card">
+<div class="card-title">📰 Forex Factory — Filtro de noticias</div>
+<div class="toggle-row" style="margin-bottom:.75rem">
+  <input type="checkbox" name="use_ff" {_checked('use_ff')}>
+  <label>Activar filtro de noticias de alto impacto</label>
+</div>
+<div class="field" style="max-width:280px">
+  <label>Buffer antes/después de la noticia (minutos)</label>
+  <input type="number" name="news_buffer_mins" value="{_v('news_buffer_mins','60')}" min="5" max="120">
+</div>
+</div>
+
+<button type="submit" class="btn">💾 Guardar configuración</button>
+<a href="/?key={key}"><button type="button" class="btn-dash">← Volver al dashboard</button></a>
+</form>
+
+</div></body></html>"""
 
 
 # ── HTML embebido ──────────────────────────────────────────────────────────────

@@ -2,11 +2,22 @@ services:
   - type: web
     name: smc-ftmo-dashboard
     env: python
-    plan: starter                          # $7/mes — sin sleep. Free tier duerme tras 15 min.
+    plan: starter                        # $7/mes — sin sleep + disco persistente
     buildCommand: pip install -r cloud/requirements.txt
     startCommand: uvicorn cloud.app:app --host 0.0.0.0 --port $PORT
+    disk:
+      name: smc-data
+      mountPath: /data                   # SQLite guarda config.db aquí
+      sizeGB: 1                          # $0.25/mes adicional
     envVars:
       - key: PUSH_TOKEN
-        generateValue: true                # Render genera un token aleatorio automáticamente
+        generateValue: true              # token para el bot → POST /push
       - key: ACCESS_TOKEN
-        generateValue: true
+        generateValue: true              # clave para ver el dashboard → ?key=...
+      - key: SECRET_KEY
+        generateValue: true              # cifra MT5 password y Telegram token en BD
+      # Alternativa a SQLite — descomenta y rellena si usas Supabase (plan free):
+      # - key: SUPABASE_URL
+      #   value: https://xxxx.supabase.co
+      # - key: SUPABASE_KEY
+      #   value: eyJhbGci...
