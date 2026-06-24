@@ -61,6 +61,12 @@ def update_state(**kwargs: Any) -> None:
         _state["last_update"] = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
 
 
+def get_state() -> dict:
+    """Devuelve una copia del estado actual (thread-safe). Usado para cloud push."""
+    with _lock:
+        return dict(_state)
+
+
 def push_log(line: str) -> None:
     """Añade una línea al log circular (máx 12 entradas)."""
     with _lock:

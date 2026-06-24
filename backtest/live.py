@@ -430,6 +430,39 @@ def get_position_pnl(ticket: int) -> dict | None:
     }
 
 
+# ── Cloud push ────────────────────────────────────────────────────────────────
+
+def push_to_cloud(url: str, token: str, state: dict) -> None:
+    """Envía el estado del bot al dashboard cloud (fire-and-forget, hilo daemon).
+
+    No bloquea el loop de trading. Los fallos se descartan silenciosamente.
+    url:   endpoint raíz del servicio cloud (ej. https://smc-ftmo.onrender.com)
+    token: valor de PUSH_TOKEN configurado en el cloud
+    state: dict del estado a publicar (serializable a JSON)
+    """
+    import threading
+
+    def _send() -> None:
+        try:
+            endpoint = url.rstrip("/") + "/push"
+            body = json.dumps(state, default=str).encode("utf-8")
+            req  = urllib.request.Request(
+                endpoint,
+                data    = body,
+                headers = {
+                    "Content-Type":  "application/json",
+                    "Authorization": f"Bearer {token}",
+                },
+                method  = "POST",
+            )
+            with urllib.request.urlopen(req, timeout=10):
+                pass
+        except Exception:
+            pass   # fallos de red no deben interrumpir el trading
+
+    threading.Thread(target=_send, daemon=True, name="cloud-push").start()
+
+
 # ── FTMO Risk Guard ────────────────────────────────────────────────────────────
 
 @dataclass

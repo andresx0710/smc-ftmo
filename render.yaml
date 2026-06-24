@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: smc-ftmo-dashboard
+    env: python
+    plan: starter                          # $7/mes — sin sleep. Free tier duerme tras 15 min.
+    buildCommand: pip install -r cloud/requirements.txt
+    startCommand: uvicorn cloud.app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PUSH_TOKEN
+        generateValue: true                # Render genera un token aleatorio automáticamente
+      - key: ACCESS_TOKEN
+        generateValue: true

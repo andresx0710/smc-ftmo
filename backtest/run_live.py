@@ -83,6 +83,12 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--mt5-server",   type=str, default="")
     g.add_argument("--mt5-path",     type=str, default="")
 
+    g = p.add_argument_group("Cloud Dashboard")
+    g.add_argument("--cloud-url",   type=str, default=os.environ.get("CLOUD_URL",   ""),
+                   dest="cloud_url",   help="URL del servicio cloud (ej. https://smc-ftmo.onrender.com)")
+    g.add_argument("--cloud-token", type=str, default=os.environ.get("CLOUD_TOKEN", ""),
+                   dest="cloud_token", help="PUSH_TOKEN configurado en el servidor cloud")
+
     g = p.add_argument_group("Telegram")
     g.add_argument("--tg-token",   type=str,
                    default=os.environ.get("TELEGRAM_BOT_TOKEN", ""), dest="tg_token",
@@ -176,8 +182,9 @@ def main() -> None:
         is_trading_hours, SESSIONS_UTC,
         generate_trade_chart, get_position_pnl,
         fetch_ff_events, is_news_blackout, _SYMBOL_CURRENCIES,
+        push_to_cloud,
     )
-    from backtest.dashboard import start_dashboard, update_state, push_log
+    from backtest.dashboard import start_dashboard, update_state, push_log, get_state
 
     # ── Mostrar sesiones en hora España ──────────────────────────────────
     logger.info("Sesiones activas (UTC | España verano CEST | España invierno CET):")
@@ -648,6 +655,10 @@ def main() -> None:
             logger.error(f"Error en ciclo {cycle}: {exc}", exc_info=True)
             time.sleep(30)
             continue
+
+        # ── Cloud push (al final de cada ciclo, fire-and-forget) ──────────
+        if args.cloud_url and args.cloud_token:
+            push_to_cloud(args.cloud_url, args.cloud_token, get_state())
 
         time.sleep(args.interval)
 
