@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+gunicorn
+psycopg2-binary
+cryptography
+python-dotenv
+requests
