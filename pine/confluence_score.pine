@@ -1,0 +1,276 @@
+//@version=5
+indicator("SMC — Confluence Score", overlay=true, max_bars_back=500)
+
+// --- INPUTS ---
+// Calibrado para EURUSD y XAUUSD en H1/H4 como timeframes principales de análisis.
+i_pivL       = input.int(5,   "Pivot Left",                   minval=1, maxval=50,  group="Detection",
+     tooltip="EURUSD/XAUUSD H1: 5 | H4: 7-10")
+i_pivR       = input.int(3,   "Pivot Right",                  minval=1, maxval=50,  group="Detection",
+     tooltip="H1: 3 | H4: 5")
+i_window     = input.int(20,  "Ventana de señal (barras)",    minval=5, maxval=200, group="Detection",
+     tooltip="Condición 'activa' si ocurrió en las últimas N barras.\nH1: 15-25 | H4: 10-15 para ambos activos.")
+i_obLookback = input.int(15,  "OB Lookback (barras)",         minval=5, maxval=50,  group="Detection")
+i_atrLen     = input.int(14,  "ATR Period",                   minval=1,             group="Detection")
+i_minScore   = input.int(3,   "Mín. confluencias para señal", minval=1, maxval=7,   group="Signal",
+     tooltip="smc-concepts.md: señal válida con al menos 3 de 7 condiciones confluidas.")
+i_colBull    = input.color(color.new(#00C853, 0), "Color alcista",  group="Colors")
+i_colBear    = input.color(color.new(#D50000, 0), "Color bajista",  group="Colors")
+
+// --- FUNCIONES ---
+
+// Busca la última vela OB (opuesta al impulso) en las últimas `lookback` barras
+f_findOB(dir, lookback, atrVal) =>
+    obH = float(na)
+    obL = float(na)
+    for i = 1 to lookback
+        impulse = dir == "bull"
+             ? (close[i-1] > open[i-1] and (close[i-1] - open[i-1]) > atrVal * 0.8)
+             : (close[i-1] < open[i-1] and (open[i-1] - close[i-1]) > atrVal * 0.8)
+        isOB = dir == "bull" ? close[i] < open[i] : close[i] > open[i]
+        if isOB and impulse
+            obH := high[i]
+            obL := low[i]
+            break
+    [obH, obL]
+
+// Genera barra visual del score: "●●●○○○○" para score=3, max=7
+f_scoreBar(score, maxScore) =>
+    bar = ""
+    for i = 1 to maxScore
+        bar := bar + (i <= score ? "●" : "○")
+    bar
+
+f_check(c) => c ? "✓" : "✗"
+f_col(c)   => c ? color.new(#00C853, 0) : color.new(#787B86, 60)
+
+// --- LÓGICA PRINCIPAL ---
+
+atr = ta.atr(i_atrLen)
+
+// ── Pivots y estructura de mercado ──
+swH = ta.pivothigh(high, i_pivL, i_pivR)
+swL = ta.pivotlow(low,   i_pivL, i_pivR)
+
+var float sh1 = na, sh2 = na
+var float sl1 = na, sl2 = na
+
+if not na(swH)
+    sh2 := sh1
+    sh1 := swH
+if not na(swL)
+    sl2 := sl1
+    sl1 := swL
+
+// HH+HL = estructura alcista | LH+LL = estructura bajista
+bullStruct = not na(sh1) and not na(sh2) and not na(sl1) and not na(sl2) and sh1 > sh2 and sl1 > sl2
+bearStruct = not na(sh1) and not na(sh2) and not na(sl1) and not na(sl2) and sh1 < sh2 and sl1 < sl2
+
+// ── Condición 1: CHoCH [Alto] ──
+// Bull: precio cierra sobre el último LH (rompiendo estructura bajista → inversión alcista)
+// Bear: precio cierra bajo el último HL (rompiendo estructura alcista → inversión bajista)
+chochBull_now = bearStruct and not na(sh1) and ta.crossover(close,  sh1)
+chochBear_now = bullStruct and not na(sl1) and ta.crossunder(close, sl1)
+
+var int chochBullBar = na
+var int chochBearBar = na
+if chochBull_now
+    chochBullBar := bar_index
+if chochBear_now
+    chochBearBar := bar_index
+
+cond_chochBull = not na(chochBullBar) and (bar_index - chochBullBar) <= i_window
+cond_chochBear = not na(chochBearBar) and (bar_index - chochBearBar) <= i_window
+
+// ── Condición 2: Order Block en zona [Alto] ──
+// Precio retestea la última vela opuesta antes del impulso más reciente
+[bullOB_H, bullOB_L] = f_findOB("bull", i_obLookback, atr)
+[bearOB_H, bearOB_L] = f_findOB("bear", i_obLookback, atr)
+
+cond_obBull = not na(bullOB_H) and close <= bullOB_H and close >= bullOB_L
+cond_obBear = not na(bearOB_H) and close <= bearOB_H and close >= bearOB_L
+
+// ── Condición 3: Liquidez barrida recientemente [Alto] ──
+// SSL swept → bullish (wick bajo sl1: stops de largos activados → posible reversión alcista)
+// BSL swept → bearish (wick sobre sh1: stops de cortos activados → posible reversión bajista)
+sslSwept_now = not na(sl1) and low  < sl1
+bslSwept_now = not na(sh1) and high > sh1
+
+var int sslSweptBar = na
+var int bslSweptBar = na
+if sslSwept_now
+    sslSweptBar := bar_index
+if bslSwept_now
+    bslSweptBar := bar_index
+
+cond_liqBull = not na(sslSweptBar) and (bar_index - sslSweptBar) <= i_window
+cond_liqBear = not na(bslSweptBar) and (bar_index - bslSweptBar) <= i_window
+
+// ── Condición 4: Fair Value Gap reciente [Medio] ──
+// Alcista: gap entre high[2] y low[0] (Pine Script: [0]=actual, [2]=2 barras atrás)
+// Bajista: gap entre high[0] y low[2]
+minGap       = 3 * syminfo.mintick
+fvgBull_now  = low[0] > high[2] and (low[0] - high[2]) >= minGap
+fvgBear_now  = high[0] < low[2] and (low[2] - high[0]) >= minGap
+
+var int fvgBullBar = na
+var int fvgBearBar = na
+if fvgBull_now
+    fvgBullBar := bar_index
+if fvgBear_now
+    fvgBearBar := bar_index
+
+cond_fvgBull = not na(fvgBullBar) and (bar_index - fvgBullBar) <= i_window
+cond_fvgBear = not na(fvgBearBar) and (bar_index - fvgBearBar) <= i_window
+
+// ── Condición 5: Premium / Discount correcto [Medio] ──
+// smc-concepts.md: solo comprar en Discount (<50%), solo vender en Premium (>50%)
+rangeValid  = not na(sh1) and not na(sl1) and sh1 > sl1
+equilibrium = rangeValid ? sl1 + (sh1 - sl1) * 0.50 : float(na)
+
+cond_pdBull = rangeValid and close < equilibrium
+cond_pdBear = rangeValid and close > equilibrium
+
+// ── Condición 6: BOS de confirmación [Medio] ──
+// Alcista: cierre sobre el último swing high (nuevo HH confirmado)
+// Bajista: cierre bajo el último swing low (nuevo LL confirmado)
+bosBull_now = not na(sh1) and ta.crossover(close,  sh1)
+bosBear_now = not na(sl1) and ta.crossunder(close, sl1)
+
+var int bosBullBar = na
+var int bosBearBar = na
+if bosBull_now
+    bosBullBar := bar_index
+if bosBear_now
+    bosBearBar := bar_index
+
+cond_bosBull = not na(bosBullBar) and (bar_index - bosBullBar) <= i_window
+cond_bosBear = not na(bosBearBar) and (bar_index - bosBearBar) <= i_window
+
+// ── Condición 7: Zona S&D alineada [Medio] ──
+// Demand: base (cuerpo < 0.5×ATR) seguida de impulso alcista (cuerpo > 1.5×ATR)
+// Supply: base seguida de impulso bajista
+isBase     = math.abs(close[1] - open[1]) < atr * 0.5
+sdBull_now = isBase and close > open and (close - open) > atr * 1.5
+sdBear_now = isBase and close < open and (open  - close) > atr * 1.5
+
+var int sdBullBar = na
+var int sdBearBar = na
+if sdBull_now
+    sdBullBar := bar_index
+if sdBear_now
+    sdBearBar := bar_index
+
+cond_sdBull = not na(sdBullBar) and (bar_index - sdBullBar) <= i_window
+cond_sdBear = not na(sdBearBar) and (bar_index - sdBearBar) <= i_window
+
+// ── Score total (0-7) y señal ──
+scoreBull = (cond_chochBull ? 1 : 0) + (cond_obBull ? 1 : 0) + (cond_liqBull ? 1 : 0) +
+            (cond_fvgBull  ? 1 : 0) + (cond_pdBull  ? 1 : 0) + (cond_bosBull ? 1 : 0) + (cond_sdBull ? 1 : 0)
+
+scoreBear = (cond_chochBear ? 1 : 0) + (cond_obBear ? 1 : 0) + (cond_liqBear ? 1 : 0) +
+            (cond_fvgBear  ? 1 : 0) + (cond_pdBear  ? 1 : 0) + (cond_bosBear ? 1 : 0) + (cond_sdBear ? 1 : 0)
+
+signalBull = scoreBull >= i_minScore
+signalBear = scoreBear >= i_minScore
+
+// Señal nueva = primera barra en la que se supera el umbral
+newSignalBull = signalBull and not signalBull[1]
+newSignalBear = signalBear and not signalBear[1]
+
+// Fondo de color: intensidad según fuerza de la señal
+bullAlpha = scoreBull >= 5 ? 85 : 92
+bearAlpha = scoreBear >= 5 ? 85 : 92
+bgcolor(signalBull and not signalBear ? color.new(i_colBull, bullAlpha) : na, title="BG Alcista")
+bgcolor(signalBear and not signalBull ? color.new(i_colBear, bearAlpha) : na, title="BG Bajista")
+
+// --- PLOTS ---
+plotshape(newSignalBull, "LONG",  shape.triangleup,   location.belowbar, i_colBull, size=size.normal)
+plotshape(newSignalBear, "SHORT", shape.triangledown, location.abovebar, i_colBear, size=size.normal)
+
+plot(scoreBull, "Score Alcista", display=display.none)
+plot(scoreBear, "Score Bajista", display=display.none)
+
+// --- TABLA ---
+var table t = table.new(position.top_right, 3, 11,
+     bgcolor      = color.new(color.black, 78),
+     border_color = color.new(color.gray, 60),
+     border_width = 1,
+     frame_color  = color.new(color.gray, 50),
+     frame_width  = 1)
+
+if barstate.islast
+    TXT_WHT = color.white
+    TXT_DIM = color.new(color.white, 50)
+    HDR_BG  = color.new(color.black, 40)
+    CELL_BG = color.new(color.black, 70)
+
+    // Encabezado de columnas
+    table.cell(t, 0, 0, "Factor",  text_color=TXT_DIM,   text_size=size.tiny,  bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(t, 1, 0, "▲ LONG",  text_color=i_colBull, text_size=size.tiny,  bgcolor=HDR_BG, text_halign=text.align_center)
+    table.cell(t, 2, 0, "▼ SHORT", text_color=i_colBear, text_size=size.tiny,  bgcolor=HDR_BG, text_halign=text.align_center)
+
+    // Filas de condiciones (Alto/Medio según smc-concepts.md)
+    table.cell(t, 0, 1,  "CHoCH  [Alto]",  text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 1,  f_check(cond_chochBull), text_color=f_col(cond_chochBull), text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 1,  f_check(cond_chochBear), text_color=f_col(cond_chochBear), text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    table.cell(t, 0, 2,  "OB zona [Alto]", text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 2,  f_check(cond_obBull),    text_color=f_col(cond_obBull),    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 2,  f_check(cond_obBear),    text_color=f_col(cond_obBear),    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    table.cell(t, 0, 3,  "Liq.   [Alto]",  text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 3,  f_check(cond_liqBull),   text_color=f_col(cond_liqBull),   text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 3,  f_check(cond_liqBear),   text_color=f_col(cond_liqBear),   text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    table.cell(t, 0, 4,  "FVG    [Medio]", text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 4,  f_check(cond_fvgBull),   text_color=f_col(cond_fvgBull),   text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 4,  f_check(cond_fvgBear),   text_color=f_col(cond_fvgBear),   text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    table.cell(t, 0, 5,  "P/D    [Medio]", text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 5,  f_check(cond_pdBull),    text_color=f_col(cond_pdBull),    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 5,  f_check(cond_pdBear),    text_color=f_col(cond_pdBear),    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    table.cell(t, 0, 6,  "BOS    [Medio]", text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 6,  f_check(cond_bosBull),   text_color=f_col(cond_bosBull),   text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 6,  f_check(cond_bosBear),   text_color=f_col(cond_bosBear),   text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    table.cell(t, 0, 7,  "S&D    [Medio]", text_color=TXT_DIM, text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 7,  f_check(cond_sdBull),    text_color=f_col(cond_sdBull),    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 7,  f_check(cond_sdBear),    text_color=f_col(cond_sdBear),    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    // Score numérico
+    sBullCol = scoreBull >= i_minScore ? i_colBull : TXT_DIM
+    sBearCol = scoreBear >= i_minScore ? i_colBear : TXT_DIM
+    table.cell(t, 0, 8, "SCORE",                        text_color=TXT_WHT,  text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(t, 1, 8, str.tostring(scoreBull) + "/7", text_color=sBullCol, text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_center)
+    table.cell(t, 2, 8, str.tostring(scoreBear) + "/7", text_color=sBearCol, text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_center)
+
+    // Barra visual del score
+    table.cell(t, 0, 9, "Barra",            text_color=TXT_DIM,  text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(t, 1, 9, f_scoreBar(scoreBull, 7), text_color=sBullCol, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_center)
+    table.cell(t, 2, 9, f_scoreBar(scoreBear, 7), text_color=sBearCol, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_center)
+
+    // Señal
+    SIG_BG = color.new(color.black, 40)
+    table.cell(t, 0, 10, "SEÑAL",                                   text_color=TXT_WHT,                          text_size=size.small, bgcolor=SIG_BG, text_halign=text.align_left)
+    table.cell(t, 1, 10, signalBull ? "● LONG"  : "—",             text_color=signalBull ? i_colBull : TXT_DIM, text_size=size.small, bgcolor=SIG_BG, text_halign=text.align_center)
+    table.cell(t, 2, 10, signalBear ? "● SHORT" : "—",             text_color=signalBear ? i_colBear : TXT_DIM, text_size=size.small, bgcolor=SIG_BG, text_halign=text.align_center)
+
+// --- ALERTAS ---
+// alertcondition: el usuario crea la alerta desde el gráfico (webhook o notificación manual)
+alertcondition(newSignalBull, "Señal LONG",
+     "SMC | LONG — confluencia alcista alcanzó umbral mínimo. Verificar OB en H1 antes de entrar.")
+alertcondition(newSignalBear, "Señal SHORT",
+     "SMC | SHORT — confluencia bajista alcanzó umbral mínimo. Verificar OB en H1 antes de entrar.")
+alertcondition(newSignalBull or newSignalBear, "Señal SMC (cualquier dirección)",
+     "SMC | Confluencia detectada — revisar tabla de condiciones y timeframe superior.")
+
+// alert(): payload JSON enviado automáticamente al webhook configurado en TradingView (Pro+)
+// FastAPI lo recibe en POST /webhook y dispara la notificación de Telegram.
+if newSignalBull
+    _c = ',"choch":' + (cond_chochBull ? "true" : "false") + ',"ob":' + (cond_obBull ? "true" : "false") + ',"liq":' + (cond_liqBull ? "true" : "false") + ',"fvg":' + (cond_fvgBull ? "true" : "false") + ',"pd":' + (cond_pdBull ? "true" : "false") + ',"bos":' + (cond_bosBull ? "true" : "false") + ',"sd":' + (cond_sdBull ? "true" : "false")
+    alert('{"action":"LONG","symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","score":' + str.tostring(scoreBull) + ',"price":' + str.tostring(close, format.mintick) + _c + '}', alert.freq_once_per_bar)
+
+if newSignalBear
+    _c = ',"choch":' + (cond_chochBear ? "true" : "false") + ',"ob":' + (cond_obBear ? "true" : "false") + ',"liq":' + (cond_liqBear ? "true" : "false") + ',"fvg":' + (cond_fvgBear ? "true" : "false") + ',"pd":' + (cond_pdBear ? "true" : "false") + ',"bos":' + (cond_bosBear ? "true" : "false") + ',"sd":' + (cond_sdBear ? "true" : "false")
+    alert('{"action":"SHORT","symbol":"' + syminfo.ticker + '","tf":"' + timeframe.period + '","score":' + str.tostring(scoreBear) + ',"price":' + str.tostring(close, format.mintick) + _c + '}', alert.freq_once_per_bar)

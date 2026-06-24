@@ -1,0 +1,156 @@
+//@version=5
+indicator("SMC — Order Blocks", overlay=true, max_bars_back=500)
+
+// --- INPUTS ---
+i_leftBars   = input.int(5,     "Left Bars",           minval=1, maxval=50, group="Pivot Detection")
+i_rightBars  = input.int(5,     "Right Bars",          minval=1, maxval=50, group="Pivot Detection")
+i_lookback   = input.int(10,    "OB Lookback (bars)",  minval=3, maxval=50, group="Order Blocks",
+     tooltip="Velas hacia atrás para localizar la última vela OB antes del impulso que causó el BOS")
+i_maxOBs     = input.int(3,     "Max OBs activos",     minval=1, maxval=10, group="Order Blocks")
+i_showMitig  = input.bool(true, "Mostrar OBs mitigados",                    group="Order Blocks")
+i_colorBull  = input.color(color.new(#00C853, 80), "OB Alcista",            group="Colors")
+i_colorBear  = input.color(color.new(#D50000, 80), "OB Bajista",            group="Colors")
+i_colorMitig = input.color(color.new(#787B86, 90), "OB Mitigado",           group="Colors")
+i_bdrBull    = input.color(color.new(#00C853,  0), "Borde Alcista",         group="Colors")
+i_bdrBear    = input.color(color.new(#D50000,  0), "Borde Bajista",         group="Colors")
+i_bdrMitig   = input.color(color.new(#787B86, 50), "Borde Mitigado",        group="Colors")
+
+// --- FUNCIONES ---
+
+// Retorna [obHigh, obLow, obBar] de la última vela OB dentro de `lookback` barras.
+// OB alcista (bull): última vela bajista (close < open) = zona de demanda institucional.
+// OB bajista (bear): última vela alcista (close > open) = zona de oferta institucional.
+// La zona válida es [low, high] de esa vela (smc-concepts.md).
+f_findOB(direction, lookback) =>
+    obHigh = float(na)
+    obLow  = float(na)
+    obBar  = int(na)
+    for i = 1 to lookback
+        if direction == "bull" and close[i] < open[i]
+            obHigh := high[i]
+            obLow  := low[i]
+            obBar  := bar_index - i
+            break
+        if direction == "bear" and close[i] > open[i]
+            obHigh := high[i]
+            obLow  := low[i]
+            obBar  := bar_index - i
+            break
+    [obHigh, obLow, obBar]
+
+// Elimina el OB más antiguo de todos los arrays (arrays son reference types en Pine Script v5)
+f_evictOldest(boxes, highs, lows, bars, types, active) =>
+    bx = array.shift(boxes)
+    if not na(bx)
+        box.delete(bx)
+    array.shift(highs)
+    array.shift(lows)
+    array.shift(bars)
+    array.shift(types)
+    array.shift(active)
+
+// --- LÓGICA PRINCIPAL ---
+
+swingHigh = ta.pivothigh(high, i_leftBars, i_rightBars)
+swingLow  = ta.pivotlow(low,  i_leftBars, i_rightBars)
+
+// Último swing high/low confirmado — usados como niveles de BOS
+var float lastSH = na
+var float lastSL = na
+
+if not na(swingHigh)
+    lastSH := swingHigh
+if not na(swingLow)
+    lastSL := swingLow
+
+// BOS: cierre por encima del último swing high (bullish) o por debajo del último swing low (bearish).
+// El BOS es el requisito de validación del OB (smc-concepts.md punto 1).
+bosBull = not na(lastSH) and ta.crossover(close,  lastSH)
+bosBear = not na(lastSL) and ta.crossunder(close, lastSL)
+
+// Arrays paralelos — un índice por OB (activo o mitigado)
+var obHighs  = array.new_float()
+var obLows   = array.new_float()
+var obBars   = array.new_int()
+var obTypes  = array.new_string()   // "bull" | "bear"
+var obBoxes  = array.new_box()
+var obActive = array.new_bool()     // true = activo, false = mitigado
+
+// BOS alcista → localizar y registrar OB alcista
+if bosBull
+    [obH, obL, obB] = f_findOB("bull", i_lookback)
+    if not na(obH)
+        if array.size(obHighs) >= i_maxOBs
+            f_evictOldest(obBoxes, obHighs, obLows, obBars, obTypes, obActive)
+        newBox = box.new(obB, obH, bar_index, obL,
+             bgcolor      = i_colorBull,
+             border_color = i_bdrBull,
+             border_width = 1,
+             extend       = extend.right)
+        label.new(obB, obH, "OB ↑",
+             color    = color.new(i_bdrBull, 80),
+             textcolor = i_bdrBull,
+             style    = label.style_label_right,
+             size     = size.tiny)
+        array.push(obHighs,  obH)
+        array.push(obLows,   obL)
+        array.push(obBars,   obB)
+        array.push(obTypes,  "bull")
+        array.push(obBoxes,  newBox)
+        array.push(obActive, true)
+
+// BOS bajista → localizar y registrar OB bajista
+if bosBear
+    [obH, obL, obB] = f_findOB("bear", i_lookback)
+    if not na(obH)
+        if array.size(obHighs) >= i_maxOBs
+            f_evictOldest(obBoxes, obHighs, obLows, obBars, obTypes, obActive)
+        newBox = box.new(obB, obH, bar_index, obL,
+             bgcolor      = i_colorBear,
+             border_color = i_bdrBear,
+             border_width = 1,
+             extend       = extend.right)
+        label.new(obB, obL, "OB ↓",
+             color    = color.new(i_bdrBear, 80),
+             textcolor = i_bdrBear,
+             style    = label.style_label_right,
+             size     = size.tiny)
+        array.push(obHighs,  obH)
+        array.push(obLows,   obL)
+        array.push(obBars,   obB)
+        array.push(obTypes,  "bear")
+        array.push(obBoxes,  newBox)
+        array.push(obActive, true)
+
+// Comprobar mitigación en cada vela para todos los OBs activos.
+// Mitigación (smc-concepts.md): precio CIERRA dentro del rango [obLow, obHigh].
+// Primera mitigación = OB pierde validez.
+obCount = array.size(obHighs)
+if obCount > 0
+    for i = 0 to obCount - 1
+        if array.get(obActive, i)
+            obH = array.get(obHighs, i)
+            obL = array.get(obLows,  i)
+            bx  = array.get(obBoxes, i)
+
+            if close >= obL and close <= obH
+                array.set(obActive, i, false)
+                if i_showMitig
+                    // Fijar el borde derecho en la vela de mitigación y cambiar visual
+                    box.set_right(bx, bar_index)
+                    box.set_extend(bx, extend.none)
+                    box.set_bgcolor(bx, i_colorMitig)
+                    box.set_border_color(bx, i_bdrMitig)
+                else
+                    box.delete(bx)
+                    array.set(obBoxes, i, na)
+
+// --- PLOTS ---
+plotshape(bosBull, "BOS → OB ↑", shape.triangleup,   location.belowbar,
+     color=color.new(#2962FF, 0), size=size.tiny)
+plotshape(bosBear, "BOS → OB ↓", shape.triangledown, location.abovebar,
+     color=color.new(#2962FF, 0), size=size.tiny)
+
+// --- ALERTAS ---
+alertcondition(bosBull, "OB Alcista formado", "SMC | OB Alcista — BOS confirma zona de demanda institucional")
+alertcondition(bosBear, "OB Bajista formado", "SMC | OB Bajista — BOS confirma zona de oferta institucional")

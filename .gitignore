@@ -1,0 +1,13 @@
+# Credenciales — nunca a git
+.env
+
+# Datos y logs generados
+backtest/data/
+logs/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/

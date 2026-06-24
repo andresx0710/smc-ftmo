@@ -1,0 +1,163 @@
+//@version=5
+indicator("SMC — Market Structure", overlay=true, max_bars_back=500)
+
+// --- INPUTS ---
+i_leftBars   = input.int(5,     "Left Bars",                minval=1, maxval=50, group="Pivot Detection")
+i_rightBars  = input.int(5,     "Right Bars",               minval=1, maxval=50, group="Pivot Detection")
+i_showLabels = input.bool(true, "Labels HH / HL / LH / LL",                     group="Display")
+i_showLines  = input.bool(true, "Líneas BOS / CHoCH",                            group="Display")
+i_colorBull  = input.color(color.new(#00C853, 0), "Alcista",                     group="Colors")
+i_colorBear  = input.color(color.new(#D50000, 0), "Bajista",                     group="Colors")
+i_colorChoch = input.color(color.new(#FF6D00, 0), "CHoCH",                       group="Colors")
+i_colorBos   = input.color(color.new(#2962FF, 0), "BOS",                         group="Colors")
+
+// --- FUNCIONES ---
+f_label(barIdx, price, txt, lblStyle, txtColor) =>
+    label.new(barIdx, price, txt,
+         color     = color.new(txtColor, 85),
+         textcolor = txtColor,
+         style     = lblStyle,
+         size      = size.small)
+
+// --- LÓGICA PRINCIPAL ---
+
+// Pivots confirmados: swingHigh/swingLow devuelven valor solo en la barra
+// de confirmación (i_rightBars velas después del pivot real)
+swingHigh = ta.pivothigh(high, i_leftBars, i_rightBars)
+swingLow  = ta.pivotlow(low,  i_leftBars, i_rightBars)
+pivotBar  = bar_index - i_rightBars
+
+// Referencia al swing previo para comparar y clasificar HH/LH y HL/LL
+var float prevSH = na
+var float prevSL = na
+
+// Niveles de estructura activos (precio y barra de origen)
+var float lastHH     = na
+var int   lastHH_bar = na
+var float lastHL     = na
+var int   lastHL_bar = na
+var float lastLH     = na
+var int   lastLH_bar = na
+var float lastLL     = na
+var int   lastLL_bar = na
+
+// Sesgo de mercado derivado de la estructura (bullish / bearish / neutral)
+var string bias = "neutral"
+
+// Líneas activas de BOS y CHoCH (se reemplazan con cada nueva señal)
+var line bosLine   = na
+var line chochLine = na
+
+// Clasificar cada nuevo swing high como HH o LH
+if not na(swingHigh)
+    if not na(prevSH)
+        if swingHigh > prevSH
+            lastHH     := swingHigh
+            lastHH_bar := pivotBar
+            if i_showLabels
+                f_label(pivotBar, swingHigh, "HH", label.style_label_down, i_colorBull)
+        else
+            lastLH     := swingHigh
+            lastLH_bar := pivotBar
+            if i_showLabels
+                f_label(pivotBar, swingHigh, "LH", label.style_label_down, i_colorBear)
+    prevSH := swingHigh
+
+// Clasificar cada nuevo swing low como HL o LL
+if not na(swingLow)
+    if not na(prevSL)
+        if swingLow > prevSL
+            lastHL     := swingLow
+            lastHL_bar := pivotBar
+            if i_showLabels
+                f_label(pivotBar, swingLow, "HL", label.style_label_up, i_colorBull)
+        else
+            lastLL     := swingLow
+            lastLL_bar := pivotBar
+            if i_showLabels
+                f_label(pivotBar, swingLow, "LL", label.style_label_up, i_colorBear)
+    prevSL := swingLow
+
+// Sesgo inicial: se fija cuando se completa la primera estructura (HH+HL o LH+LL)
+if bias == "neutral"
+    if not na(lastHH) and not na(lastHL)
+        bias := "bullish"
+    else if not na(lastLH) and not na(lastLL)
+        bias := "bearish"
+
+// BOS: ruptura en la dirección de la tendencia (confirmación de continuación)
+// Regla smc-concepts.md: la vela debe CERRAR por encima/debajo del nivel
+bosBullish = bias == "bullish" and not na(lastHH) and ta.crossover(close, lastHH)
+bosBearish = bias == "bearish" and not na(lastLL) and ta.crossunder(close, lastLL)
+
+// CHoCH: ruptura en sentido contrario a la tendencia (señal de posible reversión)
+// Regla smc-concepts.md: alcista rompe último HL → CHoCH bajista, y viceversa
+chochBearish = bias == "bullish" and not na(lastHL) and ta.crossunder(close, lastHL)
+chochBullish = bias == "bearish" and not na(lastLH) and ta.crossover(close, lastLH)
+
+// CHoCH flip de sesgo: el cambio de carácter invierte el bias para las siguientes velas
+if chochBullish
+    bias := "bullish"
+if chochBearish
+    bias := "bearish"
+
+// Dibujar línea de BOS alcista (discontinua: confirmación de tendencia)
+if bosBullish and i_showLines
+    if not na(bosLine)
+        line.delete(bosLine)
+    bosLine := line.new(lastHH_bar, lastHH, bar_index, lastHH,
+         color=i_colorBos, width=1, style=line.style_dashed)
+    f_label(bar_index, lastHH, "BOS", label.style_label_left, i_colorBos)
+
+// Dibujar línea de BOS bajista
+if bosBearish and i_showLines
+    if not na(bosLine)
+        line.delete(bosLine)
+    bosLine := line.new(lastLL_bar, lastLL, bar_index, lastLL,
+         color=i_colorBos, width=1, style=line.style_dashed)
+    f_label(bar_index, lastLL, "BOS", label.style_label_left, i_colorBos)
+
+// Dibujar línea de CHoCH alcista (sólida: cambio de carácter, más relevante que BOS)
+if chochBullish and i_showLines
+    if not na(chochLine)
+        line.delete(chochLine)
+    chochLine := line.new(lastLH_bar, lastLH, bar_index, lastLH,
+         color=i_colorChoch, width=2, style=line.style_solid)
+    f_label(bar_index, lastLH, "CHoCH ↑", label.style_label_left, i_colorChoch)
+
+// Dibujar línea de CHoCH bajista
+if chochBearish and i_showLines
+    if not na(chochLine)
+        line.delete(chochLine)
+    chochLine := line.new(lastHL_bar, lastHL, bar_index, lastHL,
+         color=i_colorChoch, width=2, style=line.style_solid)
+    f_label(bar_index, lastHL, "CHoCH ↓", label.style_label_left, i_colorChoch)
+
+// --- PLOTS ---
+plotshape(bosBullish,   "BOS ↑",   shape.triangleup,   location.belowbar, i_colorBos,   size=size.tiny)
+plotshape(bosBearish,   "BOS ↓",   shape.triangledown, location.abovebar, i_colorBos,   size=size.tiny)
+plotshape(chochBullish, "CHoCH ↑", shape.diamond,      location.belowbar, i_colorChoch, size=size.tiny)
+plotshape(chochBearish, "CHoCH ↓", shape.diamond,      location.abovebar, i_colorChoch, size=size.tiny)
+
+// Panel de sesgo de mercado en tiempo real (esquina superior derecha)
+var table biasPanel = table.new(position.top_right, 1, 2,
+     bgcolor      = color.new(color.black, 75),
+     border_color = color.new(color.gray, 50),
+     border_width = 1)
+
+if barstate.islast
+    panelColor = bias == "bullish" ? i_colorBull : bias == "bearish" ? i_colorBear : color.gray
+    table.cell(biasPanel, 0, 0, "MARKET BIAS",
+         text_color = color.new(color.white, 20),
+         text_size  = size.small,
+         bgcolor    = color.new(color.black, 60))
+    table.cell(biasPanel, 0, 1, str.upper(bias),
+         text_color = panelColor,
+         text_size  = size.normal,
+         bgcolor    = color.new(color.black, 60))
+
+// --- ALERTAS ---
+alertcondition(bosBullish,   "BOS Alcista",   "SMC | BOS Alcista — estructura alcista confirmada")
+alertcondition(bosBearish,   "BOS Bajista",   "SMC | BOS Bajista — estructura bajista confirmada")
+alertcondition(chochBullish, "CHoCH Alcista", "SMC | CHoCH Alcista — posible reversión al alza")
+alertcondition(chochBearish, "CHoCH Bajista", "SMC | CHoCH Bajista — posible reversión a la baja")

@@ -1,0 +1,494 @@
+//@version=5
+indicator("SMC — MTF Confluence Score", overlay=true, max_bars_back=1000)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  SMC MULTI-TIMEFRAME CONFLUENCE SCORE
+//  Arquitectura top-down: D1 sesgo → H1 zonas → TF actual confirmación
+//
+//  Condiciones MTF (7 en total):
+//    [D1]  1. Sesgo D1 alineado (estructura HH+HL o LH+LL)   — GATE
+//    [H1]  2. OB de H1 (precio dentro de Order Block en H1)   — Alto
+//    [H1]  3. CHoCH en H1 confirmado                          — Alto
+//    [TF]  4. BOS en TF actual                               — Medio
+//    [TF]  5. FVG en TF actual                               — Medio
+//    [TF]  6. Barrida de liquidez (SSL/BSL) en TF actual     — Medio
+//    [TF]  7. OB / S&D en TF actual (gatillo de entrada)     — Medio
+//
+//  Uso recomendado:
+//    Cargar en gráfico M5 o M15 para operativa intradía.
+//    El indicador solicita D1 y H1 automáticamente.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// ── INPUTS ───────────────────────────────────────────────────────────────────
+var GRP_TF   = "⏱ Temporalidades"
+var GRP_SIG  = "🎯 Señal"
+var GRP_DET  = "🔍 Detección"
+var GRP_VIS  = "🎨 Visual"
+
+i_tf_trend  = input.timeframe("D",  "Tendencia (D1)",  group=GRP_TF,
+    tooltip="Marco para detectar la tendencia principal. Señales sólo en dirección de este sesgo.")
+i_tf_bias   = input.timeframe("60", "Análisis / Sesgo (H1)", group=GRP_TF,
+    tooltip="Marco para OB, CHoCH y zonas clave. Típicamente H1.")
+
+i_minScore  = input.int(4,  "Score mínimo señal", minval=1, maxval=7, group=GRP_SIG)
+i_d1Gate    = input.bool(true, "D1 obligatorio (filtro duro)", group=GRP_SIG,
+    tooltip="Si ON: sólo se genera señal LONG si D1 es alcista y SHORT si D1 es bajista. Recomendado.")
+i_showLabels= input.bool(true, "Mostrar etiquetas de señal", group=GRP_VIS)
+i_showOBH1  = input.bool(true, "Dibujar zonas OB de H1",     group=GRP_VIS)
+i_showTable = input.bool(true, "Panel MTF en pantalla",      group=GRP_VIS)
+
+i_leftBars  = input.int(5,  "Pivot: barras izquierda",  minval=2, group=GRP_DET)
+i_rightBars = input.int(3,  "Pivot: barras derecha",    minval=1, group=GRP_DET)
+i_atrLen    = input.int(14, "ATR período",               minval=1, group=GRP_DET)
+i_atrMult   = input.float(0.8, "ATR mult (impulso OB)", minval=0.1, step=0.1, group=GRP_DET)
+i_obLook    = input.int(10, "OB lookback (barras)",      minval=3,  group=GRP_DET)
+i_window    = input.int(10, "Ventana condición (barras en TF actual)", minval=1, group=GRP_DET)
+i_h1Window  = input.int(10, "Ventana CHoCH H1 (barras H1)", minval=1, group=GRP_DET)
+i_minFvg    = input.int(3,  "FVG mínimo (ticks)",        minval=1,  group=GRP_DET)
+i_pdLook    = input.int(50, "P/D lookback (barras)",     minval=10, group=GRP_DET)
+i_baseMult  = input.float(0.5, "S&D base (× ATR)",      minval=0.1, step=0.1, group=GRP_DET)
+i_impMult   = input.float(1.5, "S&D impulso (× ATR)",   minval=0.5, step=0.1, group=GRP_DET)
+
+// ── COLORS ───────────────────────────────────────────────────────────────────
+C_BULL   = color.new(#00C853, 0)
+C_BEAR   = color.new(#D50000, 0)
+C_WARN   = color.new(#FF9800, 0)
+C_GRAY   = color.new(#787B86, 0)
+C_OB_B   = color.new(#00C853, 85)
+C_OB_BE  = color.new(#00C853, 60)
+C_OB_S   = color.new(#D50000, 85)
+C_OB_SE  = color.new(#D50000, 60)
+C_BG_OK  = color.new(#00C853, 96)
+C_BG_NO  = color.new(#D50000, 96)
+
+// ═══════════════════════════════════════════════════════════════════
+//  FUNCIONES — se ejecutan en el contexto del TF solicitado
+//  cuando se llaman desde request.security()
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Estructura de mercado: devuelve (sh1, sl1, bull, bear) ──────────
+f_structure() =>
+    sh = ta.pivothigh(i_leftBars, i_rightBars)
+    sl = ta.pivotlow(i_leftBars, i_rightBars)
+    var float sh1 = na, var float sh2 = na
+    var float sl1 = na, var float sl2 = na
+    if not na(sh)
+        sh2 := sh1
+        sh1 := sh
+    if not na(sl)
+        sl2 := sl1
+        sl1 := sl
+    bull = not na(sh1) and not na(sh2) and sh1 > sh2 and not na(sl1) and not na(sl2) and sl1 > sl2
+    bear = not na(sh1) and not na(sh2) and sh1 < sh2 and not na(sl1) and not na(sl2) and sl1 < sl2
+    [sh1, sl1, bull, bear]
+
+// ── OB alcista: devuelve zona (ob_h, ob_l) ─────────────────────────
+f_ob_bull() =>
+    atr = ta.atr(i_atrLen)
+    var float ob_h = na
+    var float ob_l = na
+    // Busca el OB más reciente en el lookback
+    for j = 1 to i_obLook
+        if j + 1 <= bar_index
+            impulse = close[j-1] > open[j-1] and (close[j-1] - open[j-1]) > atr * i_atrMult
+            is_ob   = close[j] < open[j]
+            if is_ob and impulse
+                ob_h := high[j]
+                ob_l := low[j]
+                break
+    [ob_h, ob_l]
+
+// ── OB bajista: devuelve zona (ob_h, ob_l) ─────────────────────────
+f_ob_bear() =>
+    atr = ta.atr(i_atrLen)
+    var float ob_h = na
+    var float ob_l = na
+    for j = 1 to i_obLook
+        if j + 1 <= bar_index
+            impulse = close[j-1] < open[j-1] and (open[j-1] - close[j-1]) > atr * i_atrMult
+            is_ob   = close[j] > open[j]
+            if is_ob and impulse
+                ob_h := high[j]
+                ob_l := low[j]
+                break
+    [ob_h, ob_l]
+
+// ── CHoCH + BOS en H1 con ventana configurable ─────────────────────
+f_h1_choch_bos() =>
+    sh = ta.pivothigh(i_leftBars, i_rightBars)
+    sl = ta.pivotlow(i_leftBars, i_rightBars)
+    var float sh1 = na, var float sh2 = na
+    var float sl1 = na, var float sl2 = na
+    if not na(sh)
+        sh2 := sh1
+        sh1 := sh
+    if not na(sl)
+        sl2 := sl1
+        sl1 := sl
+    bull = not na(sh1) and not na(sh2) and sh1 > sh2 and not na(sl1) and not na(sl2) and sl1 > sl2
+    bear = not na(sh1) and not na(sh2) and sh1 < sh2 and not na(sl1) and not na(sl2) and sl1 < sl2
+
+    chochBull = bear and not na(sh1) and ta.crossover(close, sh1)
+    chochBear = bull and not na(sl1) and ta.crossunder(close, sl1)
+    bosBull   = bull and not na(sh1) and ta.crossover(close, sh1)
+    bosBear   = bear and not na(sl1) and ta.crossunder(close, sl1)
+
+    var int chochBullBar = na
+    var int chochBearBar = na
+    var int bosBullBar   = na
+    var int bosBearBar   = na
+
+    if chochBull
+        chochBullBar := bar_index
+    if chochBear
+        chochBearBar := bar_index
+    if bosBull
+        bosBullBar := bar_index
+    if bosBear
+        bosBearBar := bar_index
+
+    cChochBull = not na(chochBullBar) and (bar_index - chochBullBar) <= i_h1Window
+    cChochBear = not na(chochBearBar) and (bar_index - chochBearBar) <= i_h1Window
+    cBosBull   = not na(bosBullBar)   and (bar_index - bosBullBar)   <= i_h1Window
+    cBosBear   = not na(bosBearBar)   and (bar_index - bosBearBar)   <= i_h1Window
+    [cChochBull, cChochBear, cBosBull, cBosBear, sh1, sl1, bull, bear]
+
+// ═══════════════════════════════════════════════════════════════════
+//  REQUEST HTF DATA  (lookahead_off = sin bias futuro)
+// ═══════════════════════════════════════════════════════════════════
+
+// D1 estructura
+[d1_sh1, d1_sl1, d1_bull, d1_bear] = request.security(
+    syminfo.tickerid, i_tf_trend, f_structure(),
+    gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// H1 OBs
+[h1_bull_ob_h, h1_bull_ob_l] = request.security(
+    syminfo.tickerid, i_tf_bias, f_ob_bull(),
+    gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+[h1_bear_ob_h, h1_bear_ob_l] = request.security(
+    syminfo.tickerid, i_tf_bias, f_ob_bear(),
+    gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// H1 CHoCH + BOS + estructura
+[h1_choch_bull, h1_choch_bear, h1_bos_bull, h1_bos_bear,
+ h1_sh1, h1_sl1, h1_bull, h1_bear] = request.security(
+    syminfo.tickerid, i_tf_bias, f_h1_choch_bos(),
+    gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+// ═══════════════════════════════════════════════════════════════════
+//  DETECCIÓN EN TF ACTUAL (gatillos de entrada: M15/M5/M1)
+// ═══════════════════════════════════════════════════════════════════
+atr_cur = ta.atr(i_atrLen)
+mintick  = syminfo.mintick
+
+// Estructura local
+sh_cur = ta.pivothigh(i_leftBars, i_rightBars)
+sl_cur = ta.pivotlow(i_leftBars, i_rightBars)
+var float cur_sh1 = na, var float cur_sh2 = na
+var float cur_sl1 = na, var float cur_sl2 = na
+if not na(sh_cur)
+    cur_sh2 := cur_sh1
+    cur_sh1 := sh_cur
+if not na(sl_cur)
+    cur_sl2 := cur_sl1
+    cur_sl1 := sl_cur
+cur_bull = not na(cur_sh1) and not na(cur_sh2) and cur_sh1 > cur_sh2 and
+     not na(cur_sl1) and not na(cur_sl2) and cur_sl1 > cur_sl2
+cur_bear = not na(cur_sh1) and not na(cur_sh2) and cur_sh1 < cur_sh2 and
+     not na(cur_sl1) and not na(cur_sl2) and cur_sl1 < cur_sl2
+
+// ── BOS en TF actual ─────────────────────────────────────────────
+var int bosB_bar = na
+var int bosS_bar = na
+if not na(cur_sh1) and ta.crossover(close, cur_sh1)
+    bosB_bar := bar_index
+if not na(cur_sl1) and ta.crossunder(close, cur_sl1)
+    bosS_bar := bar_index
+cond_bos_bull = not na(bosB_bar) and (bar_index - bosB_bar) <= i_window
+cond_bos_bear = not na(bosS_bar) and (bar_index - bosS_bar) <= i_window
+
+// ── FVG en TF actual ─────────────────────────────────────────────
+minGap = i_minFvg * mintick
+var int fvgB_bar = na
+var int fvgS_bar = na
+if bar_index >= 2
+    if low > high[2] and (low - high[2]) >= minGap
+        fvgB_bar := bar_index
+    if high < low[2] and (low[2] - high) >= minGap
+        fvgS_bar := bar_index
+cond_fvg_bull = not na(fvgB_bar) and (bar_index - fvgB_bar) <= i_window
+cond_fvg_bear = not na(fvgS_bar) and (bar_index - fvgS_bar) <= i_window
+
+// ── Barrida de liquidez (SSL/BSL) ────────────────────────────────
+var int liqB_bar = na
+var int liqS_bar = na
+if not na(cur_sl1) and low < cur_sl1
+    liqB_bar := bar_index
+if not na(cur_sh1) and high > cur_sh1
+    liqS_bar := bar_index
+cond_liq_bull = not na(liqB_bar) and (bar_index - liqB_bar) <= i_window
+cond_liq_bear = not na(liqS_bar) and (bar_index - liqS_bar) <= i_window
+
+// ── OB de entrada (TF actual) ────────────────────────────────────
+[cur_ob_bull_h, cur_ob_bull_l] = f_ob_bull()
+[cur_ob_bear_h, cur_ob_bear_l] = f_ob_bear()
+cond_ob_bull = not na(cur_ob_bull_h) and cur_ob_bull_l <= close and close <= cur_ob_bull_h
+cond_ob_bear = not na(cur_ob_bear_h) and cur_ob_bear_l <= close and close <= cur_ob_bear_h
+
+// ── S&D en TF actual ─────────────────────────────────────────────
+body_prev = math.abs(close[1] - open[1])
+body_cur  = math.abs(close    - open)
+is_base   = body_prev < atr_cur * i_baseMult
+var int sdB_bar = na
+var int sdS_bar = na
+if is_base and close > open and body_cur > atr_cur * i_impMult
+    sdB_bar := bar_index
+if is_base and close < open and body_cur > atr_cur * i_impMult
+    sdS_bar := bar_index
+cond_sd_bull = not na(sdB_bar) and (bar_index - sdB_bar) <= i_window
+cond_sd_bear = not na(sdS_bar) and (bar_index - sdS_bar) <= i_window
+
+// ═══════════════════════════════════════════════════════════════════
+//  CONDITIONS MTF — 7 CONDICIONES
+//  [1] D1 sesgo
+//  [2] H1 OB (precio en zona OB de H1)
+//  [3] H1 CHoCH confirmado
+//  [4] BOS en TF actual
+//  [5] FVG en TF actual
+//  [6] Barrida de liquidez en TF actual
+//  [7] OB/S&D en TF actual (gatillo)
+// ═══════════════════════════════════════════════════════════════════
+
+// Condición 1 — D1 sesgo
+cond_d1_bull = d1_bull
+cond_d1_bear = d1_bear
+
+// Condición 2 — H1 OB
+cond_h1ob_bull = not na(h1_bull_ob_h) and h1_bull_ob_l <= close and close <= h1_bull_ob_h
+cond_h1ob_bear = not na(h1_bear_ob_h) and h1_bear_ob_l <= close and close <= h1_bear_ob_h
+
+// Condición 3 — H1 CHoCH
+cond_h1choch_bull = h1_choch_bull
+cond_h1choch_bear = h1_choch_bear
+
+// Condición 4 — BOS (TF actual) [ya calculado arriba]
+// Condición 5 — FVG (TF actual) [ya calculado arriba]
+// Condición 6 — Liq (TF actual) [ya calculado arriba]
+// Condición 7 — OB/S&D (TF actual): combina OB y S&D como "gatillo"
+cond_entry_bull = cond_ob_bull or cond_sd_bull
+cond_entry_bear = cond_ob_bear or cond_sd_bear
+
+// ── Suma de scores (sin incluir el gate D1 en el conteo si es obligatorio) ──
+score_raw_bull = int(cond_h1ob_bull) + int(cond_h1choch_bull) +
+     int(cond_bos_bull) + int(cond_fvg_bull) + int(cond_liq_bull) + int(cond_entry_bull)
+score_raw_bear = int(cond_h1ob_bear) + int(cond_h1choch_bear) +
+     int(cond_bos_bear) + int(cond_fvg_bear) + int(cond_liq_bear) + int(cond_entry_bear)
+
+// Con D1 incluido en el score total (1 punto extra)
+score_bull = int(cond_d1_bull) + score_raw_bull
+score_bear = int(cond_d1_bear) + score_raw_bear
+
+// ── Gate D1: si está ON y D1 no alinea → score forzado a 0 ──────
+gate_bull = i_d1Gate ? cond_d1_bull : true
+gate_bear = i_d1Gate ? cond_d1_bear : true
+eff_score_bull = gate_bull ? score_bull : 0
+eff_score_bear = gate_bear ? score_bear : 0
+
+// ── Señal ────────────────────────────────────────────────────────
+signal_bull = eff_score_bull >= i_minScore
+signal_bear = eff_score_bear >= i_minScore
+
+// ═══════════════════════════════════════════════════════════════════
+//  VISUALIZACIÓN
+// ═══════════════════════════════════════════════════════════════════
+
+// ── Fondo de barra ───────────────────────────────────────────────
+bgcolor(signal_bull and barstate.isconfirmed ? C_BG_OK : na, title="BG Señal LONG")
+bgcolor(signal_bear and barstate.isconfirmed ? C_BG_NO : na, title="BG Señal SHORT")
+
+// ── Etiquetas de señal ───────────────────────────────────────────
+if i_showLabels and barstate.isconfirmed
+    if signal_bull
+        label.new(bar_index, low - atr_cur * 1.2,
+             "▲ LONG\n" + str.tostring(eff_score_bull) + "/7",
+             style=label.style_label_up, color=C_BULL,
+             textcolor=color.white, size=size.small)
+    if signal_bear
+        label.new(bar_index, high + atr_cur * 1.2,
+             "▼ SHORT\n" + str.tostring(eff_score_bear) + "/7",
+             style=label.style_label_down, color=C_BEAR,
+             textcolor=color.white, size=size.small)
+
+// ── Zonas OB de H1 ───────────────────────────────────────────────
+var box h1_bull_ob_box = na
+var box h1_bear_ob_box = na
+
+if i_showOBH1 and barstate.islast
+    if not na(h1_bull_ob_h) and not na(h1_bull_ob_l)
+        if not na(h1_bull_ob_box)
+            box.delete(h1_bull_ob_box)
+        h1_bull_ob_box := box.new(bar_index - 20, h1_bull_ob_h, bar_index + 10,
+             h1_bull_ob_l, border_color=C_OB_BE, bgcolor=C_OB_B,
+             border_width=1, text="OB H1 🔵", text_color=C_BULL, text_size=size.tiny)
+    if not na(h1_bear_ob_h) and not na(h1_bear_ob_l)
+        if not na(h1_bear_ob_box)
+            box.delete(h1_bear_ob_box)
+        h1_bear_ob_box := box.new(bar_index - 20, h1_bear_ob_h, bar_index + 10,
+             h1_bear_ob_l, border_color=C_OB_SE, bgcolor=C_OB_S,
+             border_width=1, text="OB H1 🔴", text_color=C_BEAR, text_size=size.tiny)
+
+// ── Niveles clave D1 ─────────────────────────────────────────────
+plot(d1_sh1, "D1 Swing High", color=color.new(#FF9800, 60), linewidth=1, style=plot.style_linebr)
+plot(d1_sl1, "D1 Swing Low",  color=color.new(#2196F3, 60), linewidth=1, style=plot.style_linebr)
+
+// ── Niveles H1 ───────────────────────────────────────────────────
+plot(h1_sh1, "H1 Swing High", color=color.new(#FF9800, 80), linewidth=1, style=plot.style_linebr)
+plot(h1_sl1, "H1 Swing Low",  color=color.new(#2196F3, 80), linewidth=1, style=plot.style_linebr)
+
+// ── Plotshapes de señal (para alertas) ───────────────────────────
+plotshape(signal_bull and barstate.isconfirmed, "LONG",  shape.triangleup,
+     location.belowbar, C_BULL, size=size.small)
+plotshape(signal_bear and barstate.isconfirmed, "SHORT", shape.triangledown,
+     location.abovebar, C_BEAR, size=size.small)
+
+// ═══════════════════════════════════════════════════════════════════
+//  TABLA MTF PANEL
+// ═══════════════════════════════════════════════════════════════════
+_icon(cond) => cond ? "✓" : "✗"
+_col(cond)  => cond ? C_BULL : C_BEAR
+
+d1_label = d1_bull ? "▲ ALCISTA" : d1_bear ? "▼ BAJISTA" : "── NEUTRO"
+d1_col   = d1_bull ? C_BULL : d1_bear ? C_BEAR : C_GRAY
+
+h1_label = h1_bull ? "▲ ALCISTA" : h1_bear ? "▼ BAJISTA" : "── NEUTRO"
+h1_col   = h1_bull ? C_BULL : h1_bear ? C_BEAR : C_GRAY
+
+if i_showTable and barstate.islast
+    var table t = table.new(position.top_right, 4, 12,
+         border_color=color.new(color.gray, 70), border_width=1,
+         frame_color=color.new(color.gray, 50), frame_width=1)
+
+    // Header
+    table.cell(t, 0, 0, "SMC MTF", bgcolor=#1a1a2e, text_color=color.white,
+         text_size=size.small, text_halign=text.align_center)
+    table.merge_cells(t, 0, 0, 3, 0)
+
+    // Columnas header
+    table.cell(t, 0, 1, "CONDICIÓN", bgcolor=#16213e, text_color=C_GRAY, text_size=size.tiny)
+    table.cell(t, 1, 1, "TF", bgcolor=#16213e, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 1, "▲ LONG", bgcolor=#16213e, text_color=C_BULL, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 1, "▼ SHORT", bgcolor=#16213e, text_color=C_BEAR, text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila D1 sesgo (GATE)
+    table.cell(t, 0, 2, "Sesgo (GATE)", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 2, "D1", bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 2, d1_bull ? "▲ SÍ" : "✗", bgcolor=#0d1117,
+         text_color=d1_bull ? C_BULL : C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 2, d1_bear ? "▼ SÍ" : "✗", bgcolor=#0d1117,
+         text_color=d1_bear ? C_BEAR : C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila H1 OB
+    table.cell(t, 0, 3, "OB en zona", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 3, "H1", bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 3, _icon(cond_h1ob_bull), bgcolor=#0d1117,
+         text_color=_col(cond_h1ob_bull), text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 3, _icon(cond_h1ob_bear), bgcolor=#0d1117,
+         text_color=_col(cond_h1ob_bear), text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila H1 CHoCH
+    table.cell(t, 0, 4, "CHoCH", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 4, "H1", bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 4, _icon(cond_h1choch_bull), bgcolor=#0d1117,
+         text_color=_col(cond_h1choch_bull), text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 4, _icon(cond_h1choch_bear), bgcolor=#0d1117,
+         text_color=_col(cond_h1choch_bear), text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila BOS
+    table.cell(t, 0, 5, "BOS", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 5, timeframe.period, bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 5, _icon(cond_bos_bull), bgcolor=#0d1117,
+         text_color=_col(cond_bos_bull), text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 5, _icon(cond_bos_bear), bgcolor=#0d1117,
+         text_color=_col(cond_bos_bear), text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila FVG
+    table.cell(t, 0, 6, "FVG", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 6, timeframe.period, bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 6, _icon(cond_fvg_bull), bgcolor=#0d1117,
+         text_color=_col(cond_fvg_bull), text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 6, _icon(cond_fvg_bear), bgcolor=#0d1117,
+         text_color=_col(cond_fvg_bear), text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila Liquidez
+    table.cell(t, 0, 7, "Liq. Barrida", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 7, timeframe.period, bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 7, _icon(cond_liq_bull), bgcolor=#0d1117,
+         text_color=_col(cond_liq_bull), text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 7, _icon(cond_liq_bear), bgcolor=#0d1117,
+         text_color=_col(cond_liq_bear), text_size=size.tiny, text_halign=text.align_center)
+
+    // Fila OB/S&D entrada
+    table.cell(t, 0, 8, "OB / S&D entrada", bgcolor=#0d1117, text_color=color.white, text_size=size.tiny)
+    table.cell(t, 1, 8, timeframe.period, bgcolor=#0d1117, text_color=C_GRAY, text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 2, 8, _icon(cond_entry_bull), bgcolor=#0d1117,
+         text_color=_col(cond_entry_bull), text_size=size.tiny, text_halign=text.align_center)
+    table.cell(t, 3, 8, _icon(cond_entry_bear), bgcolor=#0d1117,
+         text_color=_col(cond_entry_bear), text_size=size.tiny, text_halign=text.align_center)
+
+    // Separador
+    table.cell(t, 0, 9, "", bgcolor=color.new(color.gray, 80))
+    table.merge_cells(t, 0, 9, 3, 9)
+
+    // Score total
+    s_bg_bull = eff_score_bull >= i_minScore ? C_BULL : color.new(C_BULL, 70)
+    s_bg_bear = eff_score_bear >= i_minScore ? C_BEAR : color.new(C_BEAR, 70)
+    table.cell(t, 0, 10, "SCORE", bgcolor=#0d1117, text_color=color.white,
+         text_size=size.small, text_halign=text.align_left)
+    table.cell(t, 1, 10, "", bgcolor=#0d1117)
+    table.cell(t, 2, 10, str.tostring(eff_score_bull) + "/7",
+         bgcolor=eff_score_bull >= i_minScore ? color.new(C_BULL, 40) : #0d1117,
+         text_color=color.white, text_size=size.normal, text_halign=text.align_center)
+    table.cell(t, 3, 10, str.tostring(eff_score_bear) + "/7",
+         bgcolor=eff_score_bear >= i_minScore ? color.new(C_BEAR, 40) : #0d1117,
+         text_color=color.white, text_size=size.normal, text_halign=text.align_center)
+
+    // Estado final
+    estado_bull = eff_score_bull >= i_minScore ? "🟢 LONG" : (not gate_bull ? "⛔ D1" : "○ Espera")
+    estado_bear = eff_score_bear >= i_minScore ? "🔴 SHORT" : (not gate_bear ? "⛔ D1" : "○ Espera")
+    table.cell(t, 0, 11, "ESTADO", bgcolor=#1a1a2e, text_color=color.white,
+         text_size=size.small, text_halign=text.align_left)
+    table.merge_cells(t, 0, 11, 1, 11)
+    table.cell(t, 2, 11, estado_bull,
+         bgcolor=eff_score_bull >= i_minScore ? color.new(C_BULL, 20) : #1a1a2e,
+         text_color=color.white, text_size=size.small, text_halign=text.align_center)
+    table.cell(t, 3, 11, estado_bear,
+         bgcolor=eff_score_bear >= i_minScore ? color.new(C_BEAR, 20) : #1a1a2e,
+         text_color=color.white, text_size=size.small, text_halign=text.align_center)
+
+// ═══════════════════════════════════════════════════════════════════
+//  ALERTAS
+// ═══════════════════════════════════════════════════════════════════
+alertcondition(signal_bull and barstate.isconfirmed,
+     "MTF LONG — Score " + str.tostring(i_minScore) + "+",
+     "SMC MTF LONG {{ticker}} {{interval}} | Score: {{plot_0}}/7 | D1:{{plot_1}} H1-OB:{{plot_2}} H1-CHoCH:{{plot_3}}")
+
+alertcondition(signal_bear and barstate.isconfirmed,
+     "MTF SHORT — Score " + str.tostring(i_minScore) + "+",
+     "SMC MTF SHORT {{ticker}} {{interval}} | Score: {{plot_0}}/7 | D1:{{plot_1}} H1-OB:{{plot_2}} H1-CHoCH:{{plot_3}}")
+
+alertcondition(signal_bull and barstate.isconfirmed and eff_score_bull >= 6,
+     "MTF LONG ALTA CONFLUENCIA (6-7)",
+     "🔥 LONG ALTA CONFLUENCIA {{ticker}} {{interval}} | Score: {{plot_0}}/7")
+
+alertcondition(signal_bear and barstate.isconfirmed and eff_score_bear >= 6,
+     "MTF SHORT ALTA CONFLUENCIA (6-7)",
+     "🔥 SHORT ALTA CONFLUENCIA {{ticker}} {{interval}} | Score: {{plot_0}}/7")
+
+// Plots ocultos para uso en alertas (plot_0 = score bull, etc.)
+plot(eff_score_bull, "score_bull", display=display.none)
+plot(eff_score_bear, "score_bear", display=display.none)
+plot(int(cond_d1_bull),      "d1_bull",     display=display.none)
+plot(int(cond_h1ob_bull),    "h1_ob_bull",  display=display.none)
+plot(int(cond_h1choch_bull), "h1_choch_bull", display=display.none)

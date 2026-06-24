@@ -1,0 +1,197 @@
+//@version=5
+indicator("FTMO — Panel de Riesgo", overlay=true, max_bars_back=500)
+
+// --- INPUTS ---
+// Actualizar al inicio de cada sesión (Phase 3: automatizado vía MT5 — tech-stack.md).
+
+// ── Cuenta (actualizar manualmente cada día) ──
+i_balance   = input.float(10000.0, "Balance actual (EUR)",              step=50,    group="Cuenta",
+     tooltip="EOD balance del día anterior. Actualizar cada mañana antes de operar.")
+i_dailyPnL  = input.float(0.0,     "P&L de hoy (EUR)",                  step=10,    group="Cuenta",
+     tooltip="Ganancia/pérdida total de hoy (realizadas + abiertas).\nNegativo = pérdida. Actualizar después de cerrar cada posición.")
+i_openRisk  = input.float(0.0,     "Riesgo abierto total (EUR)",        step=10,    group="Cuenta",
+     tooltip="Suma del riesgo máximo de todas las posiciones que están abiertas ahora mismo.\nEjemplo: 2 posiciones con SL de 50 EUR cada una → 100 EUR.")
+
+// ── Límites del sistema (ftmo-rules.md) ──
+i_riskPct   = input.float(1.0,     "Riesgo por operación (%)",          step=0.1, minval=0.1, maxval=5.0, group="Límites",
+     tooltip="smc-concepts.md + ftmo-rules.md: 1% = 100 EUR sobre cuenta 10k EUR.")
+i_sysLimit  = input.float(300.0,   "Límite diario del sistema (EUR)",   step=50,    group="Límites",
+     tooltip="Más conservador que FTMO (500 EUR). Al superar este valor el sistema bloquea.\nftmo-rules.md: buffer de 200 EUR antes del límite absoluto FTMO.")
+i_totalLimit= input.float(1000.0,  "Pérdida total máx FTMO (EUR)",      step=50,    group="Límites",
+     tooltip="Drawdown máximo permitido por FTMO desde el balance inicial de 10.000 EUR.\nSi la equity cae de 9.000 EUR la cuenta se pierde.")
+i_initBal   = input.float(10000.0, "Balance inicial (EUR)",             step=100,   group="Límites",
+     tooltip="Balance del primer día — usado para calcular el drawdown total.")
+
+// ── Calculadora de posición ──
+i_slPips    = input.float(20.0,    "Stop Loss (pips / $)",               step=1, minval=0.1, group="Calculadora",
+     tooltip="SL en pips para EURUSD | SL en dólares ($) para XAUUSD.")
+i_pipVal    = input.float(10.0,    "Pip value (EUR / lot)",              step=0.5, minval=0.1, group="Calculadora",
+     tooltip="Valor de 1 pip por lote estándar en EUR:\n• EURUSD: ≈ 10 EUR/pip/lot\n• XAUUSD (por $1 de movimiento): ≈ 100 EUR/lot\nAjustar al par activo.")
+
+// ── Colores ──
+i_colOK     = input.color(color.new(#00C853, 0),  "OK",          group="Colors")
+i_colWarn   = input.color(color.new(#FF6D00, 0),  "Advertencia", group="Colors")
+i_colBlock  = input.color(color.new(#D50000, 0),  "Bloqueado",   group="Colors")
+i_colCrit   = input.color(color.new(#B71C1C, 0),  "Crítico",     group="Colors")
+
+// --- FUNCIONES ---
+
+// Barra de progreso visual: "▓▓▓▓░░░░ 50%"
+f_bar(used, maxVal, width) =>
+    pct    = math.min(1.0, math.max(0.0, used / maxVal))
+    filled = math.round(pct * width)
+    bar    = ""
+    for i = 1 to width
+        bar := bar + (i <= filled ? "▓" : "░")
+    bar + " " + str.tostring(math.round(pct * 100)) + "%"
+
+// Formatea EUR con signo explícito
+f_eur(val) =>
+    (val >= 0 ? "+" : "-") + str.tostring(math.abs(val), "0.00") + " €"
+
+// --- LÓGICA PRINCIPAL ---
+
+// ── Estado de la cuenta ──
+dailyLoss     = math.max(0.0, -i_dailyPnL)               // pérdida del día (positivo)
+equityNow     = i_balance + i_dailyPnL                    // equity actual aproximada
+totalDrawdown = math.max(0.0, i_initBal - equityNow)      // pérdida desde el inicio
+
+// Umbrales (ftmo-rules.md)
+FTMO_DAILY    = 500.0                                     // límite FTMO absoluto
+FTMO_MIN_EQ   = i_initBal - i_totalLimit                  // equity mínima = 9.000 EUR
+WARN_THRESH   = i_sysLimit * 0.60                         // 60% del límite sistema = 180 EUR
+CRIT_THRESH   = FTMO_DAILY * 0.80                         // 80% del límite FTMO = 400 EUR
+MAX_OPEN_RISK = 200.0                                     // ftmo-rules.md: máx 2 posiciones al 1%
+
+// Niveles de riesgo (exclusive, del menos al más grave)
+isOK      = dailyLoss  < WARN_THRESH
+isWarning = dailyLoss >= WARN_THRESH and dailyLoss < i_sysLimit
+isBlocked = dailyLoss >= i_sysLimit  and dailyLoss < CRIT_THRESH
+isCritical= dailyLoss >= CRIT_THRESH or equityNow < FTMO_MIN_EQ + 200.0
+
+// Riesgo de equity excedido
+equityAlert = equityNow < FTMO_MIN_EQ + 500.0            // < 9.500 → precaución de equity
+
+// ── Calculadora de sizing (ftmo-rules.md: 1% del balance) ──
+riskStd      = i_balance * i_riskPct / 100               // riesgo estándar (ej: 100 EUR)
+riskRestante = math.max(0.0, i_sysLimit - dailyLoss - i_openRisk)
+riskOp       = math.min(riskStd, riskRestante)           // riesgo real limitado por presupuesto diario
+slValueEUR   = i_slPips * i_pipVal
+lotSize      = slValueEUR > 0 ? riskOp / slValueEUR : 0.0
+lotSize      := math.floor(lotSize * 100) / 100           // redondear hacia abajo (nunca exceder riesgo)
+
+// ── Fondo de color según nivel de riesgo ──
+bgcolor(isCritical                      ? color.new(i_colCrit,  94) : na, title="BG Crítico")
+bgcolor(isBlocked and not isCritical    ? color.new(i_colBlock, 94) : na, title="BG Bloqueado")
+bgcolor(isWarning                       ? color.new(i_colWarn,  96) : na, title="BG Advertencia")
+
+// --- PLOTS ---
+// Indicador visual por estado (visible en todas las barras mientras el estado persiste)
+plotshape(isWarning,  "Precaución", shape.circle,       location.top, color.new(i_colWarn,  20), size=size.tiny)
+plotshape(isBlocked,  "Bloqueado",  shape.triangledown, location.top, color.new(i_colBlock, 20), size=size.small)
+plotshape(isCritical, "Crítico",    shape.xcross,       location.top, color.new(i_colCrit,  0),  size=size.small)
+
+// --- TABLA ---
+var table panel = table.new(position.bottom_right, 2, 15,
+     bgcolor      = color.new(color.black, 75),
+     border_color = color.new(color.gray, 55),
+     border_width = 1,
+     frame_color  = color.new(color.gray, 45),
+     frame_width  = 1)
+
+if barstate.islast
+    TXT_WHT = color.white
+    TXT_DIM = color.new(color.white, 45)
+    HDR_BG  = color.new(color.black, 40)
+    CELL_BG = color.new(color.black, 68)
+    SEP_COL = color.new(color.gray,  70)
+
+    // ── Colores contextuales ──
+    statusColor = isCritical ? i_colCrit : isBlocked ? i_colBlock : isWarning ? i_colWarn : i_colOK
+    statusText  = isCritical ? "🚨 CRÍTICO" : isBlocked ? "🔴 BLOQUEADO" : isWarning ? "⚠️ PRECAUCIÓN" : "✅ OPERABLE"
+    pnlColor    = i_dailyPnL >= 0 ? i_colOK : (isWarning or isBlocked or isCritical) ? i_colBlock : TXT_WHT
+    barDailyCol = isBlocked or isCritical ? i_colBlock : isWarning ? i_colWarn : i_colOK
+    eqColor     = equityNow < FTMO_MIN_EQ + 200.0 ? i_colCrit : equityNow < FTMO_MIN_EQ + 500.0 ? i_colWarn : TXT_WHT
+    ddColor     = totalDrawdown > i_totalLimit * 0.8 ? i_colCrit : totalDrawdown > i_totalLimit * 0.5 ? i_colWarn : TXT_DIM
+    lotColor    = riskOp < riskStd ? i_colWarn : (isBlocked or isCritical) ? i_colBlock : i_colOK
+
+    // ── ENCABEZADO ──
+    table.cell(panel, 0, 0, "FTMO — RIESGO",  text_color=TXT_WHT,     text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 0, statusText,        text_color=statusColor,  text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_right)
+
+    // ── P&L DIARIO ──
+    table.cell(panel, 0, 1, "P&L hoy",         text_color=TXT_DIM,     text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 1, f_eur(i_dailyPnL), text_color=pnlColor,    text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 2, "Usado / sist.",    text_color=TXT_DIM,     text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 2, f_bar(dailyLoss, i_sysLimit, 8),
+         text_color=barDailyCol, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 3, "Límite FTMO",      text_color=TXT_DIM,     text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 3, f_bar(dailyLoss, FTMO_DAILY, 8),
+         text_color=dailyLoss >= CRIT_THRESH ? i_colCrit : TXT_DIM,
+         text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    // ── SEPARADOR ──
+    table.cell(panel, 0, 4, "· · · · · · ·",   text_color=SEP_COL, text_size=size.tiny, bgcolor=CELL_BG)
+    table.cell(panel, 1, 4, "· · · · · · ·",   text_color=SEP_COL, text_size=size.tiny, bgcolor=CELL_BG)
+
+    // ── EQUITY Y DRAWDOWN ──
+    table.cell(panel, 0, 5, "Equity actual",    text_color=TXT_DIM,  text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 5, str.tostring(equityNow, "0.00") + " €",
+         text_color=eqColor, text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 6, "Drawdown total",   text_color=TXT_DIM,  text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 6, f_bar(totalDrawdown, i_totalLimit, 8),
+         text_color=ddColor, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 7, "Riesgo abierto",   text_color=TXT_DIM,  text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    openRiskColor = i_openRisk > MAX_OPEN_RISK ? i_colBlock : i_openRisk > MAX_OPEN_RISK * 0.7 ? i_colWarn : TXT_DIM
+    table.cell(panel, 1, 7, str.tostring(i_openRisk, "0.00") + " / " + str.tostring(MAX_OPEN_RISK, "0") + " €",
+         text_color=openRiskColor, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    // ── SEPARADOR ──
+    table.cell(panel, 0, 8, "· · · · · · ·",   text_color=SEP_COL, text_size=size.tiny, bgcolor=CELL_BG)
+    table.cell(panel, 1, 8, "· · · · · · ·",   text_color=SEP_COL, text_size=size.tiny, bgcolor=CELL_BG)
+
+    // ── CALCULADORA DE SIZING ──
+    table.cell(panel, 0, 9,  "SL (pips / $)",   text_color=TXT_DIM,  text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 9,  str.tostring(i_slPips, "0.0"), text_color=TXT_WHT, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 10, "Pip value",        text_color=TXT_DIM,  text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 10, str.tostring(i_pipVal, "0.0") + " €/lot", text_color=TXT_DIM, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 11, "Riesgo (cap.)",    text_color=TXT_DIM,  text_size=size.tiny,  bgcolor=CELL_BG, text_halign=text.align_left)
+    riskCapColor = riskOp < riskStd ? i_colWarn : TXT_DIM
+    table.cell(panel, 1, 11, str.tostring(riskOp, "0.00") + " €" + (riskOp < riskStd ? " ⚠" : ""),
+         text_color=riskCapColor, text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_right)
+
+    table.cell(panel, 0, 12, "TAMAÑO POSICIÓN", text_color=TXT_WHT,  text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 12, str.tostring(lotSize, "0.00") + " lots",
+         text_color=lotColor, text_size=size.small, bgcolor=HDR_BG, text_halign=text.align_right)
+
+    // ── SEPARADOR ──
+    table.cell(panel, 0, 13, "· · · · · · ·",   text_color=SEP_COL, text_size=size.tiny, bgcolor=CELL_BG)
+    table.cell(panel, 1, 13, "· · · · · · ·",   text_color=SEP_COL, text_size=size.tiny, bgcolor=CELL_BG)
+
+    // ── PRESUPUESTO RESTANTE ──
+    budgetLeft  = math.max(0.0, i_sysLimit - dailyLoss - i_openRisk)
+    budgetColor = budgetLeft < 100.0 ? i_colBlock : budgetLeft < 200.0 ? i_colWarn : i_colOK
+    table.cell(panel, 0, 14, "Presupuesto",      text_color=TXT_DIM,   text_size=size.tiny, bgcolor=CELL_BG, text_halign=text.align_left)
+    table.cell(panel, 1, 14, str.tostring(budgetLeft, "0.00") + " € disp.",
+         text_color=budgetColor, text_size=size.small, bgcolor=CELL_BG, text_halign=text.align_right)
+
+// --- ALERTAS ---
+// Configurar en TradingView como "Once Per Bar Close" para evitar spam.
+alertcondition(isWarning,
+     "⚠️ Precaución FTMO",
+     "FTMO | P&L diario alcanzó zona de advertencia (>60% del límite del sistema). Reducir tamaño o dejar de operar.")
+alertcondition(isBlocked,
+     "🔴 Sistema Bloqueado",
+     "FTMO | Pérdida diaria supera el límite del sistema (300 EUR). NO abrir nuevas posiciones hoy.")
+alertcondition(isCritical,
+     "🚨 Riesgo Crítico FTMO",
+     "FTMO | PELIGRO: pérdida >80% del límite FTMO (>400 EUR) o equity <9.200 EUR. DETENER TRADING INMEDIATAMENTE.")
+alertcondition(equityAlert and not isCritical,
+     "⚠️ Equity Baja",
+     "FTMO | Equity por debajo de 9.500 EUR. Quedan 500 EUR antes del límite absoluto FTMO.")

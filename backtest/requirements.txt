@@ -1,0 +1,17 @@
+# SMC-FTMO Backtester dependencies
+# Install: pip install -r backtest/requirements.txt
+
+# Core data science
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Optional: equity curve charts (png export)
+# If not installed, --no-plot is applied automatically
+matplotlib>=3.7.0
+
+# Optional: faster rolling calculations (auto-used by pandas if present)
+# scipy>=1.10.0
+
+# MT5 data download (Windows 64-bit only)
+# Required only if NOT using --input CSV file
+MetaTrader5>=5.0.45

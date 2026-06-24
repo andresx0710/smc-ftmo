@@ -1,0 +1,139 @@
+//@version=5
+indicator("SMC — Premium & Discount", overlay=true, max_bars_back=500)
+
+// --- INPUTS ---
+// Pivots más largos que los indicadores de entrada: aquí interesa el rango HTF (H4/H1 sesgo).
+// EURUSD H4: leftBars 10-15 | XAUUSD H4: leftBars 8-12 | H1 ambos: 7-10
+i_leftBars  = input.int(10,    "Left Bars (rango)",           minval=1, maxval=200, group="Range Detection",
+     tooltip="Velas izquierda para el swing que define el rango.\nH4 EURUSD: 10-15 | H4 XAUUSD: 8-12 | H1 ambos: 7-10\nValores mayores capturan el rango institucional más relevante.")
+i_rightBars = input.int(5,     "Right Bars (rango)",          minval=1, maxval=50,  group="Range Detection",
+     tooltip="H4 ambos activos: 5-7 | H1: 3-5")
+i_showLvl   = input.bool(true, "Mostrar niveles 25% / 75%",                         group="Display")
+i_showBG    = input.bool(true, "Colorear fondo por zona",                            group="Display")
+i_colorPrem = input.color(color.new(#D50000, 93), "Fondo Premium",                   group="Colors")
+i_colorDisc = input.color(color.new(#00C853, 93), "Fondo Discount",                  group="Colors")
+i_colorEq   = input.color(color.new(#2962FF,  0), "Equilibrium (50%)",               group="Colors")
+i_colorLvl  = input.color(color.new(#787B86, 30), "Niveles de rango",                group="Colors")
+
+// --- LÓGICA PRINCIPAL ---
+
+swingHigh = ta.pivothigh(high, i_leftBars, i_rightBars)
+swingLow  = ta.pivotlow(low,  i_leftBars, i_rightBars)
+
+var float rangeHigh = na
+var float rangeLow  = na
+
+if not na(swingHigh)
+    rangeHigh := swingHigh
+if not na(swingLow)
+    rangeLow := swingLow
+
+rangeValid  = not na(rangeHigh) and not na(rangeLow) and rangeHigh > rangeLow
+rangeSize   = rangeValid ? rangeHigh - rangeLow : float(na)
+equilibrium = rangeValid ? rangeLow + rangeSize * 0.50 : float(na)
+level75     = rangeValid ? rangeLow + rangeSize * 0.75 : float(na)
+level25     = rangeValid ? rangeLow + rangeSize * 0.25 : float(na)
+
+// Posición porcentual del precio en el rango: 0% = rangeLow, 100% = rangeHigh
+position  = rangeValid ? (close - rangeLow) / rangeSize * 100 : float(na)
+
+isPremium = rangeValid and close > equilibrium
+isDiscount= rangeValid and close < equilibrium
+
+// Cruce del equilibrio → precio cambia de zona
+crossToPremium  = rangeValid and ta.crossover(close,  equilibrium)
+crossToDiscount = rangeValid and ta.crossunder(close, equilibrium)
+
+// Fondo de color por zona
+bgcolor(i_showBG and isPremium  ? i_colorPrem : na, title="Premium")
+bgcolor(i_showBG and isDiscount ? i_colorDisc : na, title="Discount")
+
+// Líneas de los niveles clave.
+// Se crean una sola vez y se actualizan con set_y1/y2 para no saturar el límite de 500 líneas.
+var line lineHigh = na
+var line lineEq   = na
+var line lineLow  = na
+var line line75   = na
+var line line25   = na
+
+if rangeValid
+    if na(lineHigh)
+        lineHigh := line.new(bar_index, rangeHigh, bar_index + 1, rangeHigh,
+             color=i_colorLvl, width=1, style=line.style_dashed, extend=extend.both)
+        lineEq   := line.new(bar_index, equilibrium, bar_index + 1, equilibrium,
+             color=i_colorEq,  width=2, style=line.style_solid,  extend=extend.both)
+        lineLow  := line.new(bar_index, rangeLow,   bar_index + 1, rangeLow,
+             color=i_colorLvl, width=1, style=line.style_dashed, extend=extend.both)
+        line75   := line.new(bar_index, level75, bar_index + 1, level75,
+             color=i_colorLvl, width=1, style=line.style_dotted, extend=extend.both)
+        line25   := line.new(bar_index, level25, bar_index + 1, level25,
+             color=i_colorLvl, width=1, style=line.style_dotted, extend=extend.both)
+    else
+        line.set_y1(lineHigh, rangeHigh)
+        line.set_y2(lineHigh, rangeHigh)
+        line.set_y1(lineEq,   equilibrium)
+        line.set_y2(lineEq,   equilibrium)
+        line.set_y1(lineLow,  rangeLow)
+        line.set_y2(lineLow,  rangeLow)
+        line.set_y1(line75,   level75)
+        line.set_y2(line75,   level75)
+        line.set_y1(line25,   level25)
+        line.set_y2(line25,   level25)
+
+    // Controlar visibilidad de los niveles 25%/75% sin borrar/recrear la línea
+    HIDDEN = color.new(color.black, 100)
+    line.set_color(line75, i_showLvl ? i_colorLvl : HIDDEN)
+    line.set_color(line25, i_showLvl ? i_colorLvl : HIDDEN)
+
+// Labels en los extremos del rango al detectar nuevos pivots
+if not na(swingHigh)
+    label.new(bar_index - i_rightBars, rangeHigh, "100%",
+         color=color.new(i_colorLvl, 80), textcolor=i_colorLvl,
+         style=label.style_label_left, size=size.tiny)
+if not na(swingLow)
+    label.new(bar_index - i_rightBars, rangeLow, "0%",
+         color=color.new(i_colorLvl, 80), textcolor=i_colorLvl,
+         style=label.style_label_left, size=size.tiny)
+
+// --- PLOTS ---
+plotshape(crossToPremium,  "Entra Premium",  shape.triangledown, location.abovebar, color.new(#D50000, 0), size=size.tiny)
+plotshape(crossToDiscount, "Entra Discount", shape.triangleup,   location.belowbar, color.new(#00C853, 0), size=size.tiny)
+
+// Panel de estado en tiempo real
+var table panel = table.new(position.top_right, 2, 5,
+     bgcolor      = color.new(color.black, 78),
+     border_color = color.new(color.gray, 60),
+     border_width = 1,
+     frame_color  = color.new(color.gray, 50),
+     frame_width  = 1)
+
+if barstate.islast and rangeValid
+    zoneName  = isPremium ? "PREMIUM" : isDiscount ? "DISCOUNT" : "EQUILIBRIUM"
+    zoneColor = isPremium ? color.new(#D50000, 0) : isDiscount ? color.new(#00C853, 0) : i_colorEq
+
+    HDR_BG   = color.new(color.black, 50)
+    CELL_BG  = color.new(color.black, 70)
+    TXT_DIM  = color.new(color.white, 30)
+
+    table.cell(panel, 0, 0, "ZONA",    text_color=TXT_DIM,                  text_size=size.tiny,  bgcolor=HDR_BG)
+    table.cell(panel, 1, 0, zoneName,  text_color=zoneColor,                 text_size=size.small, bgcolor=HDR_BG)
+
+    table.cell(panel, 0, 1, "POS.",    text_color=TXT_DIM,                  text_size=size.tiny,  bgcolor=CELL_BG)
+    table.cell(panel, 1, 1, str.tostring(math.round(position, 1)) + "%",
+         text_color=color.white, text_size=size.small, bgcolor=CELL_BG)
+
+    table.cell(panel, 0, 2, "EQ 50%",  text_color=TXT_DIM,                  text_size=size.tiny,  bgcolor=CELL_BG)
+    table.cell(panel, 1, 2, str.tostring(equilibrium, format.mintick),
+         text_color=i_colorEq, text_size=size.small, bgcolor=CELL_BG)
+
+    table.cell(panel, 0, 3, "RANGO H", text_color=TXT_DIM,                  text_size=size.tiny,  bgcolor=CELL_BG)
+    table.cell(panel, 1, 3, str.tostring(rangeHigh, format.mintick),
+         text_color=color.new(#D50000, 0), text_size=size.small, bgcolor=CELL_BG)
+
+    table.cell(panel, 0, 4, "RANGO L", text_color=TXT_DIM,                  text_size=size.tiny,  bgcolor=CELL_BG)
+    table.cell(panel, 1, 4, str.tostring(rangeLow, format.mintick),
+         text_color=color.new(#00C853, 0), text_size=size.small, bgcolor=CELL_BG)
+
+// --- ALERTAS ---
+alertcondition(crossToPremium,  "Entrada Premium",  "SMC | Precio cruzó a PREMIUM — solo buscar ventas (OB bajista / Supply)")
+alertcondition(crossToDiscount, "Entrada Discount", "SMC | Precio cruzó a DISCOUNT — solo buscar compras (OB alcista / Demand)")
