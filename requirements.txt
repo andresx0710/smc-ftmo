@@ -6,3 +6,4 @@ cryptography
 python-dotenv
 requests
 loguru
+pydantic-settings
