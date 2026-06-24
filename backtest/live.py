@@ -286,6 +286,115 @@ def generate_trade_chart(
     return buf.read()
 
 
+# ── Forex Factory news filter ─────────────────────────────────────────────────
+
+# Currencies relevantes por símbolo — bloquea si hay noticia de alguna de ellas
+_SYMBOL_CURRENCIES: dict[str, tuple[str, ...]] = {
+    "EURUSD": ("EUR", "USD"),
+    "GBPUSD": ("GBP", "USD"),
+    "USDJPY": ("USD", "JPY"),
+    "XAUUSD": ("USD",),
+    "GOLD":   ("USD",),
+    "NAS100": ("USD",),
+    "US100":  ("USD",),
+    "BTCUSD": ("USD",),
+}
+
+
+def fetch_ff_events(
+    currencies: tuple[str, ...] = ("EUR", "USD"),
+    impacts:    tuple[str, ...] = ("High",),
+    retries:    int             = 3,
+) -> list[dict]:
+    """Descarga el calendario económico de Forex Factory para esta semana y la próxima.
+
+    Filtra por divisa e impacto. Reintenta con backoff en caso de 429.
+    No lanza excepciones — si el fetch falla definitivamente devuelve lo que haya.
+    """
+    import time as _time
+
+    events: list[dict] = []
+    for period in ("thisweek", "nextweek"):
+        url = f"https://nfs.faireconomy.media/ff_calendar_{period}.json"
+        for attempt in range(1, retries + 1):
+            try:
+                req = urllib.request.Request(
+                    url,
+                    headers={"User-Agent": "Mozilla/5.0 SMC-FTMO-Bot/1.0"},
+                )
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    data = json.loads(resp.read())
+                filtered = [
+                    e for e in data
+                    if e.get("impact") in impacts
+                    and e.get("country") in currencies
+                ]
+                events.extend(filtered)
+                logger.info(
+                    f"ForexFactory {period}: {len(filtered)} eventos "
+                    f"{'/'.join(impacts)} para {'/'.join(currencies)}"
+                )
+                break   # éxito — salir del retry loop
+
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    logger.debug(f"ForexFactory {period}: no disponible aún (404)")
+                    break   # 404 = semana no publicada, no reintentar
+                if e.code == 429 and attempt < retries:
+                    wait = 5 * attempt
+                    logger.debug(f"ForexFactory {period}: 429 rate-limit, reintentando en {wait}s...")
+                    _time.sleep(wait)
+                else:
+                    logger.warning(f"ForexFactory fetch ({period}) falló: {e}")
+                    break
+
+            except Exception as e:
+                logger.warning(f"ForexFactory fetch ({period}) falló: {e}")
+                break
+
+    return events
+
+
+def is_news_blackout(
+    events:      list[dict],
+    now_utc:     datetime,
+    buffer_mins: int = 30,
+) -> tuple[bool, str]:
+    """Devuelve (True, motivo) si now_utc está dentro de la ventana de una noticia.
+
+    La ventana es [evento - buffer_mins, evento + buffer_mins].
+    Devuelve (False, "") si no hay conflicto o si events está vacío.
+    """
+    from datetime import timedelta
+
+    for event in events:
+        try:
+            dt_str   = event.get("date", "")
+            event_dt = datetime.fromisoformat(dt_str)
+            if event_dt.tzinfo is None:
+                event_dt = event_dt.replace(tzinfo=timezone.utc)
+            else:
+                event_dt = event_dt.astimezone(timezone.utc).replace(tzinfo=timezone.utc)
+
+            diff_mins = (event_dt - now_utc).total_seconds() / 60
+
+            if -buffer_mins <= diff_mins <= buffer_mins:
+                title   = event.get("title",   "Noticia")
+                country = event.get("country", "?")
+                if diff_mins > 1:
+                    timing = f"en {int(diff_mins)} min"
+                elif diff_mins < -1:
+                    timing = f"hace {int(abs(diff_mins))} min"
+                else:
+                    timing = "ahora mismo"
+                return True, f"{title} ({country}) — {timing}"
+
+        except Exception:
+            continue
+
+    return False, ""
+
+
 # ── MT5 trade history ──────────────────────────────────────────────────────────
 
 def get_position_pnl(ticket: int) -> dict | None:

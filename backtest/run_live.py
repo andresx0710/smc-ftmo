@@ -15,7 +15,7 @@ import logging
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,6 +67,10 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--dry-run",           action="store_true", dest="dry_run")
     g.add_argument("--max-positions",     type=int, default=1, dest="max_positions")
     g.add_argument("--no-session-filter", action="store_true", dest="no_session_filter")
+    g.add_argument("--use-forex-factory", action="store_true", dest="use_ff",
+                   help="Bloquea nuevas entradas si hay noticias rojas en Forex Factory")
+    g.add_argument("--news-buffer-mins",  type=int, default=30, dest="news_buffer",
+                   help="Minutos de margen antes/después de una noticia (default: 30)")
 
     g = p.add_argument_group("MT5")
     g.add_argument("--mt5-login",    type=int, default=0)
@@ -166,6 +170,7 @@ def main() -> None:
         FTMOState, get_lot_size, get_open_positions, place_market_order,
         is_trading_hours, SESSIONS_UTC,
         generate_trade_chart, get_position_pnl,
+        fetch_ff_events, is_news_blackout, _SYMBOL_CURRENCIES,
     )
 
     # ── Mostrar sesiones en hora España ──────────────────────────────────
@@ -236,8 +241,21 @@ def main() -> None:
     cycle         = 0
 
     # Tracking de posiciones abiertas por este bot {ticket: snap_dict}
-    # snap_dict: direction, lot, entry, sl, tp, df_at_open
     pos_snapshots: dict[int, dict] = {}
+
+    # ── Forex Factory calendar ────────────────────────────────────────────
+    ff_events:    list = []
+    ff_last_fetch: date | None = None
+    ff_currencies = _SYMBOL_CURRENCIES.get(symbol, ("USD",))
+
+    if args.use_ff:
+        logger.info(
+            f"Forex Factory activado — divisas: {'/'.join(ff_currencies)}  "
+            f"buffer: ±{args.news_buffer} min"
+        )
+        ff_events      = fetch_ff_events(ff_currencies)
+        ff_last_fetch  = date.today()
+        logger.info(f"  {len(ff_events)} noticias rojas cargadas para esta/próxima semana")
 
     logger.info(f"Loop iniciado — cada {args.interval}s (Ctrl+C para detener)")
 
@@ -283,7 +301,14 @@ def main() -> None:
                         )
                     last_off_hours = False
 
-            # ── 3. FTMO check ─────────────────────────────────────────────
+            # ── 3. Refresco diario del calendario FF ─────────────────────
+            if args.use_ff and ff_last_fetch != date.today():
+                logger.info("Refrescando calendario Forex Factory (nuevo día)...")
+                ff_events     = fetch_ff_events(ff_currencies)
+                ff_last_fetch = date.today()
+                logger.info(f"  {len(ff_events)} noticias rojas cargadas")
+
+            # ── 4. FTMO check ─────────────────────────────────────────────
             if not ftmo.check(equity):
                 _notify(tg_token, tg_chat_id, f"*⛔ BLOQUEADO:* {ftmo.block_reason}")
                 logger.error(f"⛔ TRADING BLOQUEADO: {ftmo.block_reason}")
@@ -431,7 +456,19 @@ def main() -> None:
 
             logger.info(f"SEÑAL {direction}  score={active_score}/7")
 
-            # ── 10. Lot size ──────────────────────────────────────────────
+            # ── 10. Filtro Forex Factory ──────────────────────────────────
+            if args.use_ff and ff_events:
+                now_utc = datetime.now(timezone.utc)
+                blocked, reason = is_news_blackout(ff_events, now_utc, args.news_buffer)
+                if blocked:
+                    logger.info(
+                        f"NOTICIA ROJA — ejecución bloqueada  [{reason}]  "
+                        f"(buffer ±{args.news_buffer}min)"
+                    )
+                    time.sleep(args.interval)
+                    continue
+
+            # ── 11. Lot size ──────────────────────────────────────────────
             try:
                 lot = get_lot_size(symbol, args.sl_pips, args.risk_pct, acc.balance)
             except Exception as e:
@@ -441,7 +478,7 @@ def main() -> None:
 
             risk_eur = acc.balance * args.risk_pct / 100
 
-            # ── 11. Place order ───────────────────────────────────────────
+            # ── 12. Place order ───────────────────────────────────────────
             result = place_market_order(
                 symbol=symbol, direction=direction, lot=lot,
                 sl_pips=args.sl_pips, rr=args.rr,
