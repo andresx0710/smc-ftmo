@@ -84,617 +84,536 @@ _HTML = r"""<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>SMC-FTMO Dashboard</title>
+<title>SMC·FTMO — Command Center</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-  :root {
-    --bg:        #0a0e1a;
-    --card:      #111827;
-    --border:    #1f2937;
-    --accent:    #10b981;
-    --red:       #ef4444;
-    --yellow:    #f59e0b;
-    --blue:      #3b82f6;
-    --purple:    #8b5cf6;
-    --text:      #f9fafb;
-    --muted:     #6b7280;
-    --sm:        0.75rem;
-    --base:      0.875rem;
-    --lg:        1rem;
-    --xl:        1.25rem;
-    --2xl:       1.5rem;
-    --3xl:       1.875rem;
-  }
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
-    font-size: var(--base);
-    min-height: 100vh;
-    padding: 1rem 1.25rem 2rem;
-  }
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#06090f;--s1:#0d1117;--s2:#161b22;--s3:#1c2128;
+  --b1:#21262d;--b2:#30363d;
+  --t1:#e6edf3;--t2:#8b949e;--t3:#484f58;
+  --green:#3fb950;--gd:rgba(63,185,80,.14);
+  --red:#f85149;--rd:rgba(248,81,73,.14);
+  --amber:#d29922;--ad:rgba(210,153,34,.14);
+  --blue:#58a6ff;--bd:rgba(88,166,255,.12);
+  --font:'Inter',system-ui,-apple-system,sans-serif;
+  --mono:'JetBrains Mono','Cascadia Code','Consolas',monospace;
+}
+body{background:var(--bg);color:var(--t1);font-family:var(--font);font-size:.875rem;line-height:1.5;min-height:100vh}
+.app{max-width:1280px;margin:0 auto;padding:0 1.25rem 3rem}
+.mono{font-family:var(--mono)}
 
-  /* ── Header ── */
-  .header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 1.25rem;
-    padding-bottom: 0.75rem;
-    border-bottom: 1px solid var(--border);
-  }
-  .header-left { display: flex; align-items: center; gap: 0.75rem; }
-  .logo {
-    font-size: var(--xl);
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    color: var(--accent);
-  }
-  .symbol-tag {
-    background: var(--border);
-    color: var(--text);
-    font-size: var(--sm);
-    font-weight: 600;
-    padding: 0.25rem 0.6rem;
-    border-radius: 6px;
-    letter-spacing: 0.04em;
-  }
-  .dry-badge {
-    background: #92400e;
-    color: #fcd34d;
-    font-size: 0.65rem;
-    font-weight: 700;
-    padding: 0.2rem 0.5rem;
-    border-radius: 4px;
-    letter-spacing: 0.08em;
-    display: none;
-  }
-  .header-right { display: flex; align-items: center; gap: 1rem; }
-  .status-pill {
-    display: flex; align-items: center; gap: 0.35rem;
-    font-size: var(--sm); font-weight: 600;
-    padding: 0.3rem 0.8rem;
-    border-radius: 9999px;
-    border: 1px solid currentColor;
-  }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
-  .status-pill.operativo { color: var(--accent); }
-  .status-pill.bloqueado { color: var(--red); }
-  .status-pill.fuera     { color: var(--yellow); }
-  .status-pill.espera    { color: var(--muted); }
-  #clock { font-size: var(--sm); color: var(--muted); font-variant-numeric: tabular-nums; }
+/* offline banner */
+.offline{display:none;background:var(--rd);border:1px solid var(--red);color:var(--red);
+  font-size:.75rem;font-weight:600;text-align:center;padding:.5rem 1rem;letter-spacing:.04em}
 
-  /* ── Cards row ── */
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-  @media (max-width: 800px) { .cards { grid-template-columns: repeat(2, 1fr); } }
-  .card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 1rem 1.1rem;
-  }
-  .card-label { font-size: var(--sm); color: var(--muted); text-transform: uppercase;
-                letter-spacing: 0.07em; margin-bottom: 0.35rem; }
-  .card-value { font-size: var(--2xl); font-weight: 700; font-variant-numeric: tabular-nums; }
-  .card-sub   { font-size: var(--sm); color: var(--muted); margin-top: 0.2rem; }
-  .pos-green { color: var(--accent); }
-  .pos-red   { color: var(--red); }
-  .pos-muted { color: var(--muted); }
+/* header */
+.hdr{position:sticky;top:0;z-index:50;background:rgba(6,9,15,.85);
+  backdrop-filter:blur(16px);border-bottom:1px solid var(--b1);
+  display:flex;align-items:center;justify-content:space-between;
+  padding:.75rem 1.25rem;margin:0 -1.25rem 1.5rem}
+.hdr-l{display:flex;align-items:center;gap:.75rem}
+.logo{font-size:1.1rem;font-weight:700;letter-spacing:.08em;color:var(--t1)}
+.logo em{font-style:normal;color:var(--green)}
+.vd{width:1px;height:1.2rem;background:var(--b2)}
+.sym-badge{background:var(--s2);border:1px solid var(--b1);color:var(--t1);
+  font-family:var(--mono);font-size:.75rem;font-weight:500;
+  padding:.2rem .6rem;border-radius:6px;letter-spacing:.04em}
+.tf-tag{font-size:.7rem;color:var(--t3);font-family:var(--mono)}
+.dry-badge{display:none;background:var(--ad);border:1px solid var(--amber);
+  color:var(--amber);font-size:.65rem;font-weight:700;
+  padding:.2rem .5rem;border-radius:4px;letter-spacing:.08em}
+.hdr-r{display:flex;align-items:center;gap:.75rem}
+.pill{display:flex;align-items:center;gap:.4rem;font-size:.72rem;font-weight:600;
+  padding:.28rem .8rem;border-radius:9999px;border:1px solid;letter-spacing:.04em;
+  transition:all .3s}
+.pill .dot{width:6px;height:6px;border-radius:50%;background:currentColor}
+.p-live{color:var(--green);border-color:rgba(63,185,80,.4);background:var(--gd)}
+.p-live .dot{animation:blink 1.4s ease-in-out infinite}
+.p-block{color:var(--red);border-color:rgba(248,81,73,.4);background:var(--rd)}
+.p-idle{color:var(--amber);border-color:rgba(210,153,34,.4);background:var(--ad)}
+.p-off{color:var(--t3);border-color:var(--b2);background:var(--s2)}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.clk{font-family:var(--mono);font-size:.72rem;color:var(--t3);min-width:7rem;text-align:right}
 
-  /* ── Gauge bars ── */
-  .gauges {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-  @media (max-width: 800px) { .gauges { grid-template-columns: 1fr; } }
-  .gauge-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.9rem 1.1rem;
-  }
-  .gauge-header {
-    display: flex; justify-content: space-between; align-items: baseline;
-    margin-bottom: 0.6rem;
-  }
-  .gauge-title { font-size: var(--sm); color: var(--muted); text-transform: uppercase;
-                 letter-spacing: 0.07em; }
-  .gauge-nums  { font-size: var(--sm); color: var(--text); font-variant-numeric: tabular-nums; }
-  .bar-track {
-    width: 100%; height: 10px; background: var(--border); border-radius: 9999px;
-    overflow: hidden;
-  }
-  .bar-fill {
-    height: 100%; border-radius: 9999px;
-    transition: width 0.5s ease, background 0.5s ease;
-  }
-  .bar-green  { background: linear-gradient(90deg, #064e3b, var(--accent)); }
-  .bar-yellow { background: linear-gradient(90deg, #78350f, var(--yellow)); }
-  .bar-red    { background: linear-gradient(90deg, #7f1d1d, var(--red)); }
-  .gauge-sub { margin-top: 0.45rem; font-size: var(--sm); color: var(--muted); }
+/* KPI grid */
+.kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:.75rem;margin-bottom:.75rem}
+@media(max-width:900px){.kpi-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:500px){.kpi-grid{grid-template-columns:1fr}}
+.kpi{background:var(--s1);border:1px solid var(--b1);border-top:2px solid var(--b2);
+  border-radius:10px;padding:1rem 1.1rem;
+  transition:border-top-color .4s,transform .15s,box-shadow .15s;cursor:default}
+.kpi:hover{transform:translateY(-2px);box-shadow:0 8px 24px rgba(0,0,0,.4)}
+.c-green{border-top-color:var(--green)}
+.c-red  {border-top-color:var(--red)}
+.c-amber{border-top-color:var(--amber)}
+.c-blue {border-top-color:var(--blue)}
+.kpi-lbl{font-size:.68rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.4rem}
+.kpi-val{font-size:1.5rem;font-weight:700;font-family:var(--mono);color:var(--t1);
+  transition:color .4s;line-height:1.1;margin-bottom:.35rem}
+.kpi-sub{font-size:.72rem;color:var(--t2);display:flex;align-items:center;gap:.35rem;flex-wrap:wrap}
+.badge{font-size:.65rem;font-weight:600;padding:.1rem .4rem;border-radius:4px;font-family:var(--mono)}
+.b-pos{background:var(--gd);color:var(--green)}
+.b-neg{background:var(--rd);color:var(--red)}
+.b-neu{background:var(--s3);color:var(--t2)}
 
-  /* ── Info row (news + session) ── */
-  .info-row {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-    margin-bottom: 0.75rem;
-  }
-  @media (max-width: 800px) { .info-row { grid-template-columns: 1fr; } }
-  .info-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.9rem 1.1rem;
-    display: flex; gap: 1rem; align-items: center;
-  }
-  .traffic-light {
-    width: 42px; height: 42px; border-radius: 50%;
-    border: 2px solid var(--border);
-    display: flex; align-items: center; justify-content: center;
-    font-size: 1.2rem; flex-shrink: 0;
-    transition: background 0.4s;
-  }
-  .light-none    { background: #1f2937; }
-  .light-ok      { background: #064e3b; border-color: var(--accent); }
-  .light-warning { background: #78350f; border-color: var(--yellow); }
-  .light-blocked { background: #7f1d1d; border-color: var(--red); animation: pulse 1s infinite; }
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50%       { opacity: 0.6; }
-  }
-  .info-text-block { flex: 1; }
-  .info-title { font-size: var(--sm); color: var(--muted); text-transform: uppercase;
-                letter-spacing: 0.07em; margin-bottom: 0.3rem; }
-  .info-main  { font-size: var(--base); font-weight: 600; }
-  .info-sub   { font-size: var(--sm); color: var(--muted); margin-top: 0.1rem; }
+/* Gauges */
+.gauge-row{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem}
+@media(max-width:700px){.gauge-row{grid-template-columns:1fr}}
+.gauge{background:var(--s1);border:1px solid var(--b1);border-radius:10px;padding:.9rem 1.1rem}
+.gauge-hdr{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:.6rem}
+.gauge-lbl{font-size:.68rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em}
+.gauge-val{font-size:.75rem;color:var(--t2);font-family:var(--mono)}
+.track{height:8px;background:var(--s3);border-radius:9999px;overflow:hidden}
+.fill{height:100%;border-radius:9999px;transition:width .6s cubic-bezier(.4,0,.2,1),background .5s}
+.f-g{background:linear-gradient(90deg,#033a1b,var(--green));box-shadow:0 0 8px rgba(63,185,80,.3)}
+.f-a{background:linear-gradient(90deg,#4d3800,var(--amber));box-shadow:0 0 8px rgba(210,153,34,.3)}
+.f-r{background:linear-gradient(90deg,#4d0f0c,var(--red));box-shadow:0 0 8px rgba(248,81,73,.3)}
+.gauge-ftr{display:flex;justify-content:space-between;margin-top:.4rem;
+  font-size:.67rem;color:var(--t3);font-family:var(--mono)}
 
-  /* ── Signals bar ── */
-  .signals-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.85rem 1.1rem;
-    display: flex; align-items: center; gap: 1.5rem;
-    margin-bottom: 0.75rem;
-  }
-  .sig-label { font-size: var(--sm); color: var(--muted); text-transform: uppercase;
-               letter-spacing: 0.06em; }
-  .sig-pair  { display: flex; align-items: center; gap: 0.5rem; }
-  .sig-name  { font-size: var(--sm); color: var(--muted); }
-  .sig-score { font-size: var(--xl); font-weight: 700; font-variant-numeric: tabular-nums; }
-  .sig-score.bull { color: var(--accent); }
-  .sig-score.bear { color: var(--red); }
-  .sig-threshold { font-size: var(--sm); color: var(--muted); }
-  .sig-divider { width: 1px; height: 2rem; background: var(--border); }
+/* Info cards (news + session) */
+.info-row{display:grid;grid-template-columns:1fr 1fr;gap:.75rem;margin-bottom:.75rem}
+@media(max-width:700px){.info-row{grid-template-columns:1fr}}
+.icard{background:var(--s1);border:1px solid var(--b1);border-radius:10px;
+  padding:.9rem 1.1rem;display:flex;gap:1rem;align-items:center}
+.indicator{width:40px;height:40px;border-radius:50%;border:1.5px solid var(--b2);
+  display:flex;align-items:center;justify-content:center;
+  font-size:1.1rem;flex-shrink:0;transition:all .4s}
+.i-none {background:var(--s2);border-color:var(--b1)}
+.i-ok   {background:rgba(63,185,80,.1);border-color:rgba(63,185,80,.5)}
+.i-warn {background:rgba(210,153,34,.1);border-color:rgba(210,153,34,.5);animation:pulse-a .9s infinite}
+.i-block{background:rgba(248,81,73,.1);border-color:rgba(248,81,73,.5);animation:pulse-r .7s infinite}
+@keyframes pulse-a{0%,100%{box-shadow:0 0 0 0 rgba(210,153,34,.4)}50%{box-shadow:0 0 0 6px rgba(210,153,34,0)}}
+@keyframes pulse-r{0%,100%{box-shadow:0 0 0 0 rgba(248,81,73,.5)}50%{box-shadow:0 0 0 8px rgba(248,81,73,0)}}
+.icontent{flex:1}
+.itype{font-size:.67rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:.25rem}
+.imain{font-size:.875rem;font-weight:600;color:var(--t1);transition:color .4s}
+.isub {font-size:.7rem;color:var(--t2);margin-top:.15rem}
 
-  /* ── Tables ── */
-  .table-card {
-    background: var(--card);
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.9rem 1.1rem;
-    margin-bottom: 0.75rem;
-  }
-  .table-title { font-size: var(--sm); color: var(--muted); text-transform: uppercase;
-                 letter-spacing: 0.07em; margin-bottom: 0.75rem; }
-  table { width: 100%; border-collapse: collapse; }
-  th {
-    font-size: 0.7rem; color: var(--muted); text-transform: uppercase;
-    letter-spacing: 0.07em; text-align: left; padding: 0 0.5rem 0.5rem;
-    border-bottom: 1px solid var(--border);
-  }
-  td {
-    font-size: var(--sm); padding: 0.45rem 0.5rem;
-    border-bottom: 1px solid #1a2235; font-variant-numeric: tabular-nums;
-  }
-  tr:last-child td { border-bottom: none; }
-  .empty-row td { color: var(--muted); text-align: center; padding: 1rem; }
-  .dir-long  { color: var(--accent); font-weight: 600; }
-  .dir-short { color: var(--red);    font-weight: 600; }
-  .pnl-pos   { color: var(--accent); }
-  .pnl-neg   { color: var(--red); }
+/* Signal panel */
+.sig-card{background:var(--s1);border:1px solid var(--b1);border-radius:10px;
+  padding:1rem 1.25rem;margin-bottom:.75rem}
+.sig-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.9rem}
+.sig-title{font-size:.75rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em}
+.sig-last{font-size:.72rem;font-weight:600;padding:.18rem .55rem;border-radius:6px}
+.sl-long {background:var(--gd);color:var(--green)}
+.sl-short{background:var(--rd);color:var(--red)}
+.sl-none {background:var(--s3);color:var(--t3)}
+.sig-grid{display:flex;gap:0;align-items:stretch}
+.sig-side{flex:1;display:flex;flex-direction:column;gap:.5rem;padding:.25rem 1rem}
+.sig-side:first-child{padding-left:0}
+.sig-divider{width:1px;background:var(--b1);margin:.25rem 0}
+.sig-dir{font-size:.7rem;font-weight:700;letter-spacing:.1em;color:var(--t2)}
+.sd-bull{color:var(--green)}
+.sd-bear{color:var(--red)}
+.sig-row{display:flex;align-items:center;gap:.75rem}
+.sig-num{font-size:2.2rem;font-weight:700;font-family:var(--mono);line-height:1;
+  transition:all .4s;min-width:2rem}
+.sn-bull{color:var(--green)}
+.sn-bear{color:var(--red)}
+.sn-off{opacity:.2}
+.sn-bull.on{text-shadow:0 0 16px rgba(63,185,80,.6)}
+.sn-bear.on{text-shadow:0 0 16px rgba(248,81,73,.6)}
+.dots{display:flex;gap:5px;align-items:center}
+.d{width:10px;height:10px;border-radius:50%;background:var(--b2);
+  transition:all .35s cubic-bezier(.4,0,.2,1);flex-shrink:0}
+.d.on-bull{background:var(--green);box-shadow:0 0 6px rgba(63,185,80,.7)}
+.d.on-bear{background:var(--red);box-shadow:0 0 6px rgba(248,81,73,.7)}
+.sig-thr{font-size:.67rem;color:var(--t3);font-family:var(--mono)}
 
-  /* ── Log ── */
-  .log-card {
-    background: #080c18;
-    border: 1px solid var(--border);
-    border-radius: 10px;
-    padding: 0.85rem 1.1rem;
-  }
-  .log-title { font-size: var(--sm); color: var(--muted); text-transform: uppercase;
-               letter-spacing: 0.07em; margin-bottom: 0.6rem; }
-  .log-lines { list-style: none; }
-  .log-lines li {
-    font-size: 0.72rem; font-family: 'Cascadia Code', 'Consolas', monospace;
-    color: #64748b; padding: 0.12rem 0;
-    border-bottom: 1px solid #0f1623;
-  }
-  .log-lines li:last-child { border-bottom: none; color: #94a3b8; }
-  .log-lines li:nth-last-child(2) { color: #6b7280; }
+/* Tables */
+.tbl-card{background:var(--s1);border:1px solid var(--b1);border-radius:10px;
+  padding:.9rem 1.1rem;margin-bottom:.75rem;overflow-x:auto}
+.tbl-hdr{display:flex;align-items:center;gap:.6rem;margin-bottom:.75rem}
+.tbl-title{font-size:.75rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em}
+.tbl-cnt{background:var(--s3);color:var(--t2);font-size:.65rem;font-weight:600;
+  padding:.1rem .45rem;border-radius:9999px;font-family:var(--mono)}
+table{width:100%;border-collapse:collapse}
+th{font-size:.65rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;
+  text-align:left;padding:.3rem .6rem .5rem;border-bottom:1px solid var(--b1)}
+td{font-size:.78rem;padding:.45rem .6rem;border-bottom:1px solid var(--s2);
+  font-family:var(--mono);color:var(--t2);transition:background .2s}
+tr:hover td{background:var(--s2)}
+tr:last-child td{border-bottom:none}
+.empty td{color:var(--t3);text-align:center;padding:1.2rem;font-family:var(--font)}
+.dl{color:var(--green);font-weight:600}
+.ds{color:var(--red);font-weight:600}
+.pp{color:var(--green)}
+.pn{color:var(--red)}
+.tk{background:var(--s3);color:var(--t2);padding:.1rem .35rem;border-radius:4px;font-size:.72rem}
 
-  /* ── Footer ── */
-  .footer {
-    margin-top: 1.5rem;
-    text-align: center;
-    font-size: 0.7rem;
-    color: #374151;
-  }
+/* Log */
+.log-card{background:#030508;border:1px solid var(--b1);border-radius:10px;
+  padding:.9rem 1.1rem;margin-bottom:.75rem}
+.log-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:.7rem}
+.log-title{font-size:.75rem;color:var(--t3);text-transform:uppercase;letter-spacing:.08em;
+  display:flex;align-items:center;gap:.5rem}
+.log-dot{width:6px;height:6px;border-radius:50%;background:var(--green);
+  animation:blink 1.4s ease-in-out infinite}
+.log-ts{font-size:.67rem;color:var(--t3);font-family:var(--mono)}
+.log-body{display:flex;flex-direction:column;gap:1px}
+.ll{display:flex;gap:.75rem;padding:.22rem 0;border-bottom:1px solid rgba(255,255,255,.03);
+  animation:fade-in .3s ease}
+.ll:last-child{border-bottom:none}
+@keyframes fade-in{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.lt{font-family:var(--mono);font-size:.68rem;color:var(--t3);flex-shrink:0;min-width:5rem}
+.ll span:last-child{font-family:var(--mono);font-size:.72rem;color:var(--t2)}
+.ll:last-child span:last-child{color:var(--t1)}
+
+/* Footer */
+.footer{display:flex;justify-content:space-between;font-size:.67rem;color:var(--t3);
+  padding:.75rem 0 0;border-top:1px solid var(--b1);font-family:var(--mono)}
 </style>
 </head>
 <body>
+<div class="app">
 
-<!-- ── HEADER ── -->
-<div class="header">
-  <div class="header-left">
-    <span class="logo">SMC-FTMO</span>
-    <span class="symbol-tag" id="symbol-tag">—</span>
-    <span class="dry-badge" id="dry-badge">DRY RUN</span>
+<div class="offline" id="banner">⚠ Bot desconectado — sin datos en los últimos 2 minutos</div>
+
+<header class="hdr">
+  <div class="hdr-l">
+    <span class="logo">SMC·<em>FTMO</em></span>
+    <span class="vd"></span>
+    <span class="sym-badge" id="sym">—</span>
+    <span class="tf-tag" id="tf-tag"></span>
+    <span class="dry-badge" id="dry">DRY RUN</span>
   </div>
-  <div class="header-right">
-    <span class="status-pill espera" id="status-pill">
-      <span class="dot"></span>
-      <span id="status-text">Iniciando…</span>
-    </span>
-    <span id="clock">—</span>
+  <div class="hdr-r">
+    <div class="pill p-off" id="pill"><span class="dot"></span><span id="pill-txt">Conectando</span></div>
+    <span class="clk" id="clk">—</span>
+  </div>
+</header>
+
+<div class="kpi-grid">
+  <div class="kpi c-blue">
+    <div class="kpi-lbl">Balance MT5</div>
+    <div class="kpi-val" id="bal">—</div>
+    <div class="kpi-sub">Referencia FTMO</div>
+  </div>
+  <div class="kpi" id="eq-card">
+    <div class="kpi-lbl">Equity actual</div>
+    <div class="kpi-val" id="eq">—</div>
+    <div class="kpi-sub"><span id="eq-delta" class="badge b-neu">—</span><span id="eq-sub"></span></div>
+  </div>
+  <div class="kpi" id="pnl-card">
+    <div class="kpi-lbl">P&amp;L hoy</div>
+    <div class="kpi-val" id="pnl">—</div>
+    <div class="kpi-sub">Límite: <span id="pnl-lim">—</span></div>
+  </div>
+  <div class="kpi" id="pos-card">
+    <div class="kpi-lbl">Posiciones abiertas</div>
+    <div class="kpi-val" id="pos-n">0 / 1</div>
+    <div class="kpi-sub">Ciclo <span class="badge b-neu" id="cyc">#0</span></div>
   </div>
 </div>
 
-<!-- ── METRIC CARDS ── -->
-<div class="cards">
-  <div class="card">
-    <div class="card-label">Balance MT5</div>
-    <div class="card-value pos-muted" id="balance">—</div>
-    <div class="card-sub">Referencia FTMO</div>
+<div class="gauge-row">
+  <div class="gauge">
+    <div class="gauge-hdr">
+      <span class="gauge-lbl">Suelo FTMO — Drawdown máx. 10%</span>
+      <span class="gauge-val" id="ftmo-val">—</span>
+    </div>
+    <div class="track"><div class="fill f-g" id="ftmo-bar" style="width:100%"></div></div>
+    <div class="gauge-ftr"><span id="ftmo-l">—</span><span id="ftmo-r">—</span></div>
   </div>
-  <div class="card">
-    <div class="card-label">Equity actual</div>
-    <div class="card-value" id="equity">—</div>
-    <div class="card-sub" id="equity-sub">—</div>
-  </div>
-  <div class="card">
-    <div class="card-label">P&amp;L hoy</div>
-    <div class="card-value" id="daily-pnl">—</div>
-    <div class="card-sub" id="daily-pnl-sub">Límite: —</div>
-  </div>
-  <div class="card">
-    <div class="card-label">Posiciones</div>
-    <div class="card-value" id="pos-count">0/1</div>
-    <div class="card-sub" id="cycle-sub">Ciclo #0</div>
+  <div class="gauge">
+    <div class="gauge-hdr">
+      <span class="gauge-lbl">Stop diario — Límite conservador</span>
+      <span class="gauge-val" id="day-val">—</span>
+    </div>
+    <div class="track"><div class="fill f-g" id="day-bar" style="width:0%"></div></div>
+    <div class="gauge-ftr"><span id="day-l">—</span><span id="day-r">—</span></div>
   </div>
 </div>
 
-<!-- ── GAUGES ── -->
-<div class="gauges">
-  <div class="gauge-card">
-    <div class="gauge-header">
-      <span class="gauge-title">Suelo FTMO (10% DD)</span>
-      <span class="gauge-nums" id="ftmo-nums">—</span>
-    </div>
-    <div class="bar-track">
-      <div class="bar-fill bar-green" id="ftmo-bar" style="width:100%"></div>
-    </div>
-    <div class="gauge-sub" id="ftmo-sub">Margen disponible: —</div>
-  </div>
-  <div class="gauge-card">
-    <div class="gauge-header">
-      <span class="gauge-title">Límite diario</span>
-      <span class="gauge-nums" id="daily-nums">—</span>
-    </div>
-    <div class="bar-track">
-      <div class="bar-fill bar-green" id="daily-bar" style="width:0%"></div>
-    </div>
-    <div class="gauge-sub" id="daily-sub">Pérdida: —</div>
-  </div>
-</div>
-
-<!-- ── NEWS + SESSION ── -->
 <div class="info-row">
-  <div class="info-card">
-    <div class="traffic-light light-none" id="news-light">📰</div>
-    <div class="info-text-block">
-      <div class="info-title">Noticias Forex Factory</div>
-      <div class="info-main" id="news-main">No configurado</div>
-      <div class="info-sub"  id="news-sub">Activa --use-forex-factory</div>
+  <div class="icard">
+    <div class="indicator i-none" id="news-ind">📰</div>
+    <div class="icontent">
+      <div class="itype">Forex Factory</div>
+      <div class="imain" id="news-main">—</div>
+      <div class="isub"  id="news-sub">—</div>
     </div>
   </div>
-  <div class="info-card">
-    <div class="traffic-light light-none" id="session-light">🕐</div>
-    <div class="info-text-block">
-      <div class="info-title">Sesión de mercado</div>
-      <div class="info-main" id="session-main">—</div>
-      <div class="info-sub"  id="session-sub">Londres 10:00–18:00 | NY 15:30–00:00 CEST</div>
+  <div class="icard">
+    <div class="indicator i-none" id="sess-ind">🕐</div>
+    <div class="icontent">
+      <div class="itype">Sesión de mercado</div>
+      <div class="imain" id="sess-main">—</div>
+      <div class="isub">Londres 10:00–18:00 · NY 15:30–00:00 CEST</div>
     </div>
   </div>
 </div>
 
-<!-- ── SIGNALS ── -->
-<div class="signals-card">
-  <span class="sig-label">Señales SMC</span>
-  <div class="sig-pair">
-    <span class="sig-name">LONG</span>
-    <span class="sig-score bull" id="score-bull">0</span>
+<div class="sig-card">
+  <div class="sig-hdr">
+    <span class="sig-title">Análisis SMC — Confluencia de señales</span>
+    <span class="sig-last sl-none" id="sig-last">Sin señal</span>
   </div>
-  <div class="sig-divider"></div>
-  <div class="sig-pair">
-    <span class="sig-name">SHORT</span>
-    <span class="sig-score bear" id="score-bear">0</span>
+  <div class="sig-grid">
+    <div class="sig-side">
+      <span class="sig-dir sd-bull">▲ LONG</span>
+      <div class="sig-row">
+        <span class="sig-num sn-bull sn-off" id="sc-bull">0</span>
+        <div class="dots" id="dots-bull">
+          <span class="d"></span><span class="d"></span><span class="d"></span><span class="d"></span>
+          <span class="d"></span><span class="d"></span><span class="d"></span>
+        </div>
+      </div>
+      <span class="sig-thr" id="thr-bull">0 / 7 condiciones</span>
+    </div>
+    <div class="sig-divider"></div>
+    <div class="sig-side">
+      <span class="sig-dir sd-bear">▼ SHORT</span>
+      <div class="sig-row">
+        <span class="sig-num sn-bear sn-off" id="sc-bear">0</span>
+        <div class="dots" id="dots-bear">
+          <span class="d"></span><span class="d"></span><span class="d"></span><span class="d"></span>
+          <span class="d"></span><span class="d"></span><span class="d"></span>
+        </div>
+      </div>
+      <span class="sig-thr" id="thr-bear">0 / 7 condiciones</span>
+    </div>
   </div>
-  <div class="sig-divider"></div>
-  <span class="sig-threshold" id="sig-threshold">umbral: 5/7</span>
-  <div style="flex:1"></div>
-  <span class="sig-label" id="last-signal-dir" style="font-size:0.8rem">—</span>
 </div>
 
-<!-- ── OPEN POSITIONS ── -->
-<div class="table-card">
-  <div class="table-title">Posiciones abiertas</div>
+<div class="tbl-card">
+  <div class="tbl-hdr">
+    <span class="tbl-title">Posiciones abiertas</span>
+    <span class="tbl-cnt" id="pos-cnt">0</span>
+  </div>
   <table>
-    <thead>
-      <tr>
-        <th>Ticket</th><th>Símbolo</th><th>Dir</th>
-        <th>Lote</th><th>Entrada</th><th>SL</th><th>TP</th><th>P&amp;L</th>
-      </tr>
-    </thead>
-    <tbody id="pos-tbody">
-      <tr class="empty-row"><td colspan="8">Sin posiciones abiertas</td></tr>
-    </tbody>
+    <thead><tr><th>Ticket</th><th>Par</th><th>Dir</th><th>Lote</th><th>Entrada</th><th>SL</th><th>TP</th><th>P&amp;L</th></tr></thead>
+    <tbody id="pos-tbody"><tr class="empty"><td colspan="8">Sin posiciones abiertas</td></tr></tbody>
   </table>
 </div>
 
-<!-- ── RECENT TRADES ── -->
-<div class="table-card">
-  <div class="table-title">Últimas operaciones</div>
+<div class="tbl-card">
+  <div class="tbl-hdr">
+    <span class="tbl-title">Historial de operaciones</span>
+    <span class="tbl-cnt" id="trade-cnt">0</span>
+  </div>
   <table>
-    <thead>
-      <tr>
-        <th>Hora</th><th>Símbolo</th><th>Dir</th><th>P&amp;L</th><th>Motivo</th>
-      </tr>
-    </thead>
-    <tbody id="trades-tbody">
-      <tr class="empty-row"><td colspan="5">Sin operaciones registradas</td></tr>
-    </tbody>
+    <thead><tr><th>Hora</th><th>Par</th><th>Dir</th><th>P&amp;L</th><th>Resultado</th></tr></thead>
+    <tbody id="trade-tbody"><tr class="empty"><td colspan="5">Sin operaciones registradas</td></tr></tbody>
   </table>
 </div>
 
-<!-- ── LOG ── -->
 <div class="log-card">
-  <div class="log-title">Log en tiempo real</div>
-  <ul class="log-lines" id="log-lines">
-    <li>Esperando datos del bot…</li>
-  </ul>
+  <div class="log-hdr">
+    <span class="log-title"><span class="log-dot"></span>Log en tiempo real</span>
+    <span class="log-ts" id="log-ts">—</span>
+  </div>
+  <div class="log-body" id="log-body">
+    <div class="ll"><span class="lt">—</span><span>Esperando datos del bot…</span></div>
+  </div>
 </div>
 
-<div class="footer">SMC-FTMO Dashboard · Actualiza cada 3s · <span id="last-update">—</span></div>
+<div class="footer">
+  <span>SMC·FTMO Command Center · Actualiza cada 3s</span>
+  <span id="ft-upd">—</span>
+</div>
 
-<!-- ── JAVASCRIPT ── -->
+</div>
+
 <script>
 "use strict";
+const $ = id => document.getElementById(id);
+const fmt = (n,d=2) => n==null||isNaN(n) ? '—'
+  : Number(n).toLocaleString('es-ES',{minimumFractionDigits:d,maximumFractionDigits:d});
+const fmtE = (n,sign=false) => {
+  if (n==null||isNaN(n)) return '—';
+  const pre = n<0?'-':(sign&&n>0?'+':'');
+  return pre+Math.abs(n).toLocaleString('es-ES',{minimumFractionDigits:2,maximumFractionDigits:2})+' EUR';
+};
+const clamp = (v,lo,hi) => Math.min(hi,Math.max(lo,v));
 
-function fmt(n, d=2) {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  return Number(n).toLocaleString('es-ES', {minimumFractionDigits: d, maximumFractionDigits: d});
-}
-function fmtEur(n, sign=false) {
-  if (n === null || n === undefined || isNaN(n)) return '—';
-  const abs = Math.abs(n);
-  const prefix = n < 0 ? '-' : (sign && n > 0 ? '+' : '');
-  return prefix + abs.toLocaleString('es-ES', {minimumFractionDigits: 2, maximumFractionDigits: 2}) + ' EUR';
-}
-function clamp(v, lo, hi) { return Math.min(hi, Math.max(lo, v)); }
+// Clock
+const tick = () => {
+  const n=new Date(),p=x=>String(x).padStart(2,'0');
+  $('clk').textContent=p(n.getUTCHours())+':'+p(n.getUTCMinutes())+':'+p(n.getUTCSeconds())+' UTC';
+};
+setInterval(tick,1000); tick();
 
-// Live clock
-function updateClock() {
-  const now = new Date();
-  const pad = n => String(n).padStart(2,'0');
-  document.getElementById('clock').textContent =
-    pad(now.getUTCHours()) + ':' + pad(now.getUTCMinutes()) + ':' + pad(now.getUTCSeconds()) + ' UTC';
+function setPill(type,txt){
+  $('pill').className='pill '+type;
+  $('pill-txt').textContent=txt;
 }
-setInterval(updateClock, 1000);
-updateClock();
 
-async function refresh() {
+function setDots(id,score,type){
+  document.querySelectorAll('#'+id+' .d').forEach((d,i)=>{
+    d.className='d'+(i<score?' on-'+type:'');
+  });
+}
+
+async function refresh(){
   let s;
-  try {
-    const r = await fetch('/api/state');
-    if (!r.ok) throw new Error('HTTP ' + r.status);
-    s = await r.json();
-  } catch(e) {
-    const pill = document.getElementById('status-pill');
-    pill.className = 'status-pill bloqueado';
-    document.getElementById('status-text').textContent = 'DESCONECTADO';
+  try{
+    const r=await fetch('/api/state');
+    if(!r.ok) throw 0;
+    s=await r.json();
+  }catch{
+    setPill('p-off','DESCONECTADO');
     return;
   }
 
-  // ── Symbol & dry run
-  document.getElementById('symbol-tag').textContent = s.symbol + '  ' + s.tf_chain;
-  const dryBadge = document.getElementById('dry-badge');
-  dryBadge.style.display = s.dry_run ? 'inline' : 'none';
+  // Offline banner
+  const banner=$('banner');
+  if(s.last_update){
+    const parts=s.last_update.replace(' UTC','').split(':');
+    const ps=parseInt(parts[0])*3600+parseInt(parts[1])*60+parseInt(parts[2]);
+    const n=new Date(),ns=n.getUTCHours()*3600+n.getUTCMinutes()*60+n.getUTCSeconds();
+    banner.style.display=((ns-ps+86400)%86400)>120?'block':'none';
+  }else{
+    banner.style.display='none';
+  }
 
-  // ── Status pill
-  const pill = document.getElementById('status-pill');
-  const statusMap = {
-    operativo:    ['operativo', 'OPERATIVO'],
-    bloqueado:    ['bloqueado', 'BLOQUEADO'],
-    fuera_sesion: ['fuera',     'FUERA DE SESIÓN'],
-    sin_señal:    ['espera',    'EN ESPERA'],
-    iniciando:    ['espera',    'INICIANDO'],
+  // Header
+  $('sym').textContent=s.symbol||'—';
+  $('tf-tag').textContent=s.tf_chain?'· '+s.tf_chain:'';
+  $('dry').style.display=s.dry_run?'inline':'none';
+
+  // Pill
+  const PM={
+    operativo:   ['p-live','OPERATIVO'],
+    bloqueado:   ['p-block','BLOQUEADO'],
+    fuera_sesion:['p-idle','FUERA SESIÓN'],
+    sin_señal:   ['p-idle','EN ESPERA'],
+    iniciando:   ['p-idle','INICIANDO'],
   };
-  const [cls, txt] = statusMap[s.status] || ['espera', s.status.toUpperCase()];
-  pill.className = 'status-pill ' + cls;
-  document.getElementById('status-text').textContent = txt;
+  const[pc,pt]=PM[s.status]||['p-off',(s.status||'?').toUpperCase()];
+  setPill(pc,pt);
 
-  // ── Metric cards
-  document.getElementById('balance').textContent = fmt(s.balance) + ' EUR';
+  // Balance
+  $('bal').textContent=fmt(s.balance)+' EUR';
 
-  const eqEl = document.getElementById('equity');
-  eqEl.textContent = fmt(s.equity) + ' EUR';
-  const diff = (s.equity || 0) - (s.initial_balance || 10000);
-  eqEl.className = 'card-value ' + (diff >= 0 ? 'pos-green' : 'pos-red');
-  document.getElementById('equity-sub').textContent =
-    (diff >= 0 ? '+' : '') + fmt(diff) + ' EUR vs inicio';
+  // Equity
+  const diff=(s.equity||0)-(s.initial_balance||10000);
+  $('eq').textContent=fmt(s.equity)+' EUR';
+  $('eq').style.color=diff>=0?'var(--green)':'var(--red)';
+  const ed=$('eq-delta');
+  ed.textContent=(diff>=0?'+':'')+fmt(diff)+' EUR';
+  ed.className='badge '+(diff>=0?'b-pos':'b-neg');
+  $('eq-card').className='kpi '+(diff>=0?'c-green':'c-red');
 
-  const pnl = s.daily_pnl || 0;
-  const pnlEl = document.getElementById('daily-pnl');
-  pnlEl.textContent = fmtEur(pnl, true);
-  pnlEl.className   = 'card-value ' + (pnl >= 0 ? 'pos-green' : 'pos-red');
-  document.getElementById('daily-pnl-sub').textContent =
-    'Límite: -' + fmt(s.daily_limit_eur) + ' EUR';
+  // P&L
+  const pnl=s.daily_pnl||0;
+  $('pnl').textContent=fmtE(pnl,true);
+  $('pnl').style.color=pnl>=0?'var(--green)':'var(--red)';
+  $('pnl-lim').textContent='-'+fmt(s.daily_limit_eur||100)+' EUR';
+  $('pnl-card').className='kpi '+(pnl<-(s.daily_limit_eur||100)*.7?'c-red':pnl<0?'c-amber':'c-green');
 
-  const nPos = (s.open_positions || []).length;
-  const posEl = document.getElementById('pos-count');
-  posEl.textContent = nPos + '/1';
-  posEl.className   = 'card-value ' + (nPos > 0 ? 'pos-green' : 'pos-muted');
-  document.getElementById('cycle-sub').textContent = 'Ciclo #' + (s.cycle || 0);
+  // Positions count
+  const np=(s.open_positions||[]).length;
+  $('pos-n').textContent=np+' / 1';
+  $('pos-n').style.color=np>0?'var(--green)':'var(--t1)';
+  $('cyc').textContent='#'+(s.cycle||0);
+  $('pos-cnt').textContent=np;
+  $('pos-card').className='kpi '+(np>0?'c-green':'c-blue');
 
-  // ── FTMO gauge
-  const floor  = s.ftmo_floor || 9000;
-  const init   = s.initial_balance || 10000;
-  const eq     = s.equity || 0;
-  const ftmoRange  = init - floor;              // 1000 EUR de margen total
-  const ftmoUsed   = Math.max(0, init - eq);   // cuánto se ha perdido
-  const ftmoPct    = clamp((1 - ftmoUsed / ftmoRange) * 100, 0, 100);
-  const ftmoBar    = document.getElementById('ftmo-bar');
-  ftmoBar.style.width = ftmoPct + '%';
-  ftmoBar.className    = 'bar-fill ' +
-    (ftmoPct > 60 ? 'bar-green' : ftmoPct > 30 ? 'bar-yellow' : 'bar-red');
-  document.getElementById('ftmo-nums').textContent =
-    fmt(eq) + ' / ' + fmt(init) + ' EUR';
-  document.getElementById('ftmo-sub').textContent =
-    'Margen hasta suelo: ' + fmt(eq - floor) + ' EUR  (suelo: ' + fmt(floor) + ' EUR)';
+  // FTMO gauge
+  const floor=s.ftmo_floor||9000,init=s.initial_balance||10000,eq=s.equity||0;
+  const fp=clamp((1-Math.max(0,init-eq)/(init-floor))*100,0,100);
+  const fb=$('ftmo-bar');
+  fb.style.width=fp+'%';
+  fb.className='fill '+(fp>60?'f-g':fp>30?'f-a':'f-r');
+  $('ftmo-val').textContent=fmt(eq)+' / '+fmt(init)+' EUR';
+  $('ftmo-l').textContent='Margen: '+fmt(eq-floor)+' EUR';
+  $('ftmo-r').textContent='Suelo: '+fmt(floor)+' EUR';
 
-  // ── Daily limit gauge
-  const lossToday = Math.max(0, -(pnl));          // pérdida positiva
-  const limitEur  = s.daily_limit_eur || 100;
-  const dailyPct  = clamp((lossToday / limitEur) * 100, 0, 100);
-  const dailyBar  = document.getElementById('daily-bar');
-  dailyBar.style.width = dailyPct + '%';
-  dailyBar.className   = 'bar-fill ' +
-    (dailyPct < 50 ? 'bar-green' : dailyPct < 80 ? 'bar-yellow' : 'bar-red');
-  document.getElementById('daily-nums').textContent =
-    fmt(lossToday) + ' / ' + fmt(limitEur) + ' EUR';
-  document.getElementById('daily-sub').textContent =
-    dailyPct < 100
-      ? 'Pérdida hoy: ' + fmtEur(-lossToday) + '  —  Restante: ' + fmtEur(limitEur - lossToday)
-      : '⛔ LÍMITE DIARIO ALCANZADO — reanuda mañana';
+  // Daily gauge
+  const loss=Math.max(0,-pnl),lim=s.daily_limit_eur||100;
+  const dp=clamp((loss/lim)*100,0,100);
+  const db=$('day-bar');
+  db.style.width=dp+'%';
+  db.className='fill '+(dp<50?'f-g':dp<80?'f-a':'f-r');
+  $('day-val').textContent=fmt(loss)+' / '+fmt(lim)+' EUR';
+  $('day-l').textContent=dp<100?'Pérdida: '+fmtE(-loss):'⛔ Límite alcanzado';
+  $('day-r').textContent=dp<100?'Restante: '+fmtE(lim-loss):'';
 
-  // ── News traffic light
-  const nl  = document.getElementById('news-light');
-  const nm  = document.getElementById('news-main');
-  const ns2 = document.getElementById('news-sub');
-  if (s.news_status === 'none') {
-    nl.className = 'traffic-light light-none'; nl.textContent = '📰';
-    nm.textContent = 'Sin filtro activo';
-    ns2.textContent = 'Activa --use-forex-factory';
-  } else if (s.news_status === 'blocked') {
-    nl.className = 'traffic-light light-blocked'; nl.textContent = '🔴';
-    nm.textContent = '⛔ BLACKOUT — ' + (s.next_news_title || 'Noticia roja');
-    ns2.textContent = s.next_news_mins !== null
-      ? 'Minutos: ' + s.next_news_mins
-      : 'Ejecución bloqueada';
-  } else if (s.news_status === 'warning') {
-    nl.className = 'traffic-light light-warning'; nl.textContent = '🟡';
-    nm.textContent = '⚠ PRECAUCIÓN — ' + (s.next_news_title || '');
-    ns2.textContent = 'En ' + (s.next_news_mins || '?') + ' min — prepárate';
-  } else {
-    nl.className = 'traffic-light light-ok'; nl.textContent = '🟢';
-    nm.textContent = 'Libre para operar';
-    ns2.textContent = s.next_news_title
-      ? 'Próxima: ' + s.next_news_title + ' (en ' + s.next_news_mins + ' min)'
-      : 'Sin noticias próximas detectadas';
+  // News
+  const ni=$('news-ind'),nm=$('news-main'),ns=$('news-sub');
+  const NS={
+    none:   ['i-none','📰','Sin filtro activo','Activa --use-forex-factory'],
+    ok:     ['i-ok','🟢','Libre para operar',s.next_news_title?'Próx: '+s.next_news_title+' ('+s.next_news_mins+'min)':'Sin noticias próximas'],
+    warning:['i-warn','🟡','Precaución — '+(s.next_news_title||''),'En '+(s.next_news_mins||'?')+' min'],
+    blocked:['i-block','🔴','⛔ BLACKOUT — '+(s.next_news_title||'Noticia roja'),s.next_news_mins!=null?'Faltan '+s.next_news_mins+' min':'Bloqueado'],
+  };
+  const[nc,ne,nt,nst]=NS[s.news_status]||NS.none;
+  ni.className='indicator '+nc; ni.textContent=ne;
+  nm.textContent=nt; ns.textContent=nst;
+
+  // Session
+  const si=$('sess-ind'),sm=$('sess-main');
+  if(s.in_session){
+    si.className='indicator i-ok'; si.textContent='🟢';
+    sm.textContent=s.session||'Sesión activa'; sm.style.color='var(--green)';
+  }else{
+    si.className='indicator i-none'; si.textContent='🌙';
+    sm.textContent=s.session||'Fuera de sesión'; sm.style.color='var(--t2)';
   }
 
-  // ── Session
-  const sl2  = document.getElementById('session-light');
-  const sm2  = document.getElementById('session-main');
-  if (s.in_session) {
-    sl2.className = 'traffic-light light-ok'; sl2.textContent = '🟢';
-    sm2.textContent = s.session || 'Sesión activa';
-    sm2.style.color = 'var(--accent)';
-  } else {
-    sl2.className = 'traffic-light light-none'; sl2.textContent = '🌙';
-    sm2.textContent = s.session || 'Fuera de sesión';
-    sm2.style.color = 'var(--muted)';
-  }
+  // Signals
+  const bull=s.score_bull||0,bear=s.score_bear||0,minSc=s.min_score||5;
+  $('sc-bull').textContent=bull;
+  $('sc-bear').textContent=bear;
+  $('sc-bull').className='sig-num sn-bull '+(bull>=minSc?'on':'sn-off');
+  $('sc-bear').className='sig-num sn-bear '+(bear>=minSc?'on':'sn-off');
+  $('thr-bull').textContent=bull+' / 7 condiciones';
+  $('thr-bear').textContent=bear+' / 7 condiciones';
+  setDots('dots-bull',bull,'bull');
+  setDots('dots-bear',bear,'bear');
+  const sl=$('sig-last');
+  if(s.last_signal_dir==='LONG')      {sl.textContent='▲ Señal LONG'; sl.className='sig-last sl-long';}
+  else if(s.last_signal_dir==='SHORT'){sl.textContent='▼ Señal SHORT';sl.className='sig-last sl-short';}
+  else                                 {sl.textContent='Sin señal';    sl.className='sig-last sl-none';}
 
-  // ── Signals
-  const sb = s.score_bull || 0;
-  const sr = s.score_bear || 0;
-  const minSc = s.min_score || 5;
-  const sbEl = document.getElementById('score-bull');
-  const srEl = document.getElementById('score-bear');
-  sbEl.textContent = sb;
-  srEl.textContent = sr;
-  sbEl.style.opacity = sb >= minSc ? '1' : '0.4';
-  srEl.style.opacity = sr >= minSc ? '1' : '0.4';
-  document.getElementById('sig-threshold').textContent = 'umbral: ' + minSc + '/7';
-  const dirEl = document.getElementById('last-signal-dir');
-  if (s.last_signal_dir === 'LONG')  { dirEl.textContent = '▲ Señal LONG activa';  dirEl.style.color = 'var(--accent)'; }
-  else if (s.last_signal_dir === 'SHORT') { dirEl.textContent = '▼ Señal SHORT activa'; dirEl.style.color = 'var(--red)'; }
-  else { dirEl.textContent = 'Sin señal'; dirEl.style.color = 'var(--muted)'; }
+  // Positions table
+  const pos=s.open_positions||[];
+  $('pos-tbody').innerHTML=pos.length===0
+    ?'<tr class="empty"><td colspan="8">Sin posiciones abiertas</td></tr>'
+    :pos.map(p=>`<tr>
+      <td><span class="tk">#${p.ticket}</span></td>
+      <td class="mono">${p.symbol}</td>
+      <td class="${p.dir==='LONG'?'dl':'ds'}">${p.dir==='LONG'?'▲ LONG':'▼ SHORT'}</td>
+      <td class="mono">${fmt(p.lot,2)}</td>
+      <td class="mono">${fmt(p.entry,5)}</td>
+      <td class="mono" style="color:var(--red)">${fmt(p.sl,5)}</td>
+      <td class="mono" style="color:var(--green)">${fmt(p.tp,5)}</td>
+      <td class="${(p.pnl||0)>=0?'pp':'pn'}">${fmtE(p.pnl,true)}</td>
+    </tr>`).join('');
 
-  // ── Open positions
-  const posTbody = document.getElementById('pos-tbody');
-  const positions = s.open_positions || [];
-  if (positions.length === 0) {
-    posTbody.innerHTML = '<tr class="empty-row"><td colspan="8">Sin posiciones abiertas</td></tr>';
-  } else {
-    posTbody.innerHTML = positions.map(p => {
-      const pnlCls = (p.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-      const dirCls = p.dir === 'LONG' ? 'dir-long' : 'dir-short';
-      return `<tr>
-        <td>${p.ticket}</td>
-        <td>${p.symbol}</td>
-        <td class="${dirCls}">${p.dir}</td>
-        <td>${fmt(p.lot,2)}</td>
-        <td>${fmt(p.entry,5)}</td>
-        <td>${fmt(p.sl,5)}</td>
-        <td>${fmt(p.tp,5)}</td>
-        <td class="${pnlCls}">${fmtEur(p.pnl,true)}</td>
-      </tr>`;
+  // Trades table
+  const trades=[...(s.recent_trades||[])].reverse();
+  $('trade-cnt').textContent=trades.length;
+  $('trade-tbody').innerHTML=trades.length===0
+    ?'<tr class="empty"><td colspan="5">Sin operaciones registradas</td></tr>'
+    :trades.map(t=>`<tr>
+      <td class="mono" style="color:var(--t2)">${t.time||'—'}</td>
+      <td class="mono">${t.symbol||'—'}</td>
+      <td class="${t.dir==='LONG'?'dl':'ds'}">${t.dir==='LONG'?'▲ LONG':'▼ SHORT'}</td>
+      <td class="${(t.pnl||0)>=0?'pp':'pn'}">${fmtE(t.pnl,true)}</td>
+      <td style="color:var(--t2);font-size:.72rem">${t.motivo||'—'}</td>
+    </tr>`).join('');
+
+  // Log
+  const lines=s.log_lines||[];
+  $('log-body').innerHTML=lines.length===0
+    ?'<div class="ll"><span class="lt">—</span><span>Esperando datos…</span></div>'
+    :lines.map(l=>{
+      const ts=l.match(/^\d{2}:\d{2}/)?.[0]||'';
+      const msg=ts?l.slice(ts.length).trim():l;
+      return `<div class="ll"><span class="lt">${ts}</span><span>${msg}</span></div>`;
     }).join('');
-  }
+  $('log-ts').textContent=s.last_update||'—';
 
-  // ── Recent trades
-  const tradesTbody = document.getElementById('trades-tbody');
-  const trades = s.recent_trades || [];
-  if (trades.length === 0) {
-    tradesTbody.innerHTML = '<tr class="empty-row"><td colspan="5">Sin operaciones registradas</td></tr>';
-  } else {
-    tradesTbody.innerHTML = [...trades].reverse().map(t => {
-      const pnlCls = (t.pnl || 0) >= 0 ? 'pnl-pos' : 'pnl-neg';
-      const dirCls = t.dir === 'LONG' ? 'dir-long' : 'dir-short';
-      return `<tr>
-        <td>${t.time || '—'}</td>
-        <td>${t.symbol || '—'}</td>
-        <td class="${dirCls}">${t.dir || '—'}</td>
-        <td class="${pnlCls}">${fmtEur(t.pnl,true)}</td>
-        <td>${t.motivo || '—'}</td>
-      </tr>`;
-    }).join('');
-  }
-
-  // ── Log
-  const logUl = document.getElementById('log-lines');
-  const lines  = s.log_lines || [];
-  if (lines.length === 0) {
-    logUl.innerHTML = '<li>Esperando datos del bot…</li>';
-  } else {
-    logUl.innerHTML = lines.map(l => `<li>${l}</li>`).join('');
-  }
-
-  document.getElementById('last-update').textContent =
-    'Última actualización: ' + (s.last_update || '—');
+  $('ft-upd').textContent='Última actualización: '+(s.last_update||'—')+'  ·  Ciclo #'+(s.cycle||0);
 }
 
-setInterval(refresh, 3000);
+setInterval(refresh,3000);
 refresh();
 </script>
 </body>
