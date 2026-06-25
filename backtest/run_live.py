@@ -69,6 +69,8 @@ def _parse_args() -> argparse.Namespace:
     g.add_argument("--interval",          type=int, default=60)
     g.add_argument("--dry-run",           action="store_true", dest="dry_run")
     g.add_argument("--max-positions",     type=int, default=1, dest="max_positions")
+    g.add_argument("--max-hold-hours",    type=float, default=8.0, dest="max_hold_hours",
+                   help="Cierra posición automáticamente si lleva más de N horas abierta (default: 8)")
     g.add_argument("--no-session-filter", action="store_true", dest="no_session_filter")
     g.add_argument("--use-forex-factory", action="store_true", dest="use_ff",
                    help="Bloquea nuevas entradas si hay noticias rojas en Forex Factory")
@@ -154,9 +156,9 @@ def _apply_cloud_config(args) -> None:
         r = _req.Request(f"{url}/config", headers={"Authorization": f"Bearer {token}"})
         with _req.urlopen(r, timeout=10) as resp:
             cfg = _json.loads(resp.read())
-        logger.info(f"Config cargada desde cloud: {url}")
+        print(f"[cloud] Config cargada desde {url}")
     except Exception as e:
-        logger.warning(f"No se pudo cargar config cloud ({e}) — usando args locales")
+        print(f"[cloud] No se pudo cargar config ({e}) — usando args locales")
         return
 
     # Solo aplica valores de la nube cuando el arg está en su valor por defecto / None
@@ -237,6 +239,7 @@ def main() -> None:
     from backtest.detector import detect_signals_chain, DEFAULT_MTF_PARAMS, MINTICKS
     from backtest.live      import (
         FTMOState, get_lot_size, get_open_positions, place_market_order,
+        close_position,
         is_trading_hours, SESSIONS_UTC,
         generate_trade_chart, get_position_pnl,
         fetch_ff_events, is_news_blackout, _SYMBOL_CURRENCIES,
@@ -479,7 +482,29 @@ def main() -> None:
                 time.sleep(args.interval)
                 continue
 
-            # ── 5. Detectar posiciones cerradas ───────────────────────────
+            # ── 5a. Cierre automático por tiempo máximo ───────────────────
+            if args.max_hold_hours > 0:
+                for pos in get_open_positions(symbol):
+                    open_dt = datetime.fromtimestamp(pos.time, tz=timezone.utc)
+                    hold_h  = (now_utc - open_dt).total_seconds() / 3600
+                    if hold_h >= args.max_hold_hours:
+                        direction_pos = "LONG" if pos.type == 0 else "SHORT"
+                        logger.info(
+                            f"CIERRE AUTOMÁTICO #{pos.ticket} — {direction_pos} "
+                            f"lleva {hold_h:.1f}h abierta (máx {args.max_hold_hours}h)"
+                        )
+                        ok = close_position(pos.ticket, symbol, pos.volume, direction_pos)
+                        if ok:
+                            msg = (
+                                f"⏱ *CIERRE AUTOMÁTICO* — {symbol}\n"
+                                f"Dirección: `{direction_pos}`  |  Ticket: `#{pos.ticket}`\n"
+                                f"Posición abierta `{hold_h:.1f}h` — límite `{args.max_hold_hours}h`\n"
+                                f"P&L flotante al cerrar: `{pos.profit:+.2f} {currency}`"
+                            )
+                            _notify(tg_token, tg_chat_id, msg)
+                            push_log(f"CIERRE AUTO #{pos.ticket} {direction_pos} ({hold_h:.1f}h)")
+
+            # ── 5b. Detectar posiciones cerradas ──────────────────────────
             # Comparamos las posiciones que teníamos tracked vs las que MT5 reporta abiertas
             if pos_snapshots:
                 current_tickets = {p.ticket for p in get_open_positions(symbol)}
