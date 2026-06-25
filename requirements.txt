@@ -9,3 +9,4 @@ loguru
 pydantic-settings
 telebot
 pandas
+httpx
