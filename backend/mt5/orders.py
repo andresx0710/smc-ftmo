@@ -14,8 +14,12 @@ import math
 from dataclasses import dataclass
 from typing import Optional
 
-import MetaTrader5 as mt5
 from loguru import logger
+
+try:
+    import MetaTrader5 as mt5
+except ImportError:
+    mt5 = None  # type: ignore[assignment]
 
 
 @dataclass
