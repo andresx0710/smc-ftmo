@@ -3,13 +3,12 @@
     "frontend": {
       "routePrefix": "/",
       "framework": "vite",
-      "installCommand": "npm install",
-      "buildCommand": "npm run build"
+      "rootDirectory": "frontend"
     },
     "backend": {
-      "root": "backend",
       "routePrefix": "/_/backend",
       "framework": "python",
+      "rootDirectory": "backend",
       "entrypoint": "main.py"
     }
   }
