@@ -245,7 +245,7 @@ def main() -> None:
         fetch_ff_events, is_news_blackout, _SYMBOL_CURRENCIES,
         push_to_cloud,
     )
-    from backtest.dashboard import start_dashboard, update_state, push_log, get_state
+    from backtest.dashboard import start_dashboard, update_state, push_log, get_state, get_controls
 
     # ── Mostrar sesiones en hora España ──────────────────────────────────
     logger.info("Sesiones activas (UTC | España verano CEST | España invierno CET):")
@@ -357,6 +357,16 @@ def main() -> None:
     while True:
         cycle += 1
         try:
+            # ── 0. Controles remotos del dashboard ────────────────────────
+            ctrl = get_controls()
+            _eff_min_score = ctrl.get("min_score_override") or args.min_score
+            if ctrl.get("paused", False):
+                update_state(status="sin_señal", bot_paused=True)
+                logger.info("Bot en pausa (control dashboard) — esperando 30s")
+                time.sleep(30)
+                continue
+            update_state(bot_paused=False)
+
             # ── 1. Account info ───────────────────────────────────────────
             acc = mt5.account_info()
             if acc is None:
@@ -607,8 +617,8 @@ def main() -> None:
             score_bull = int(last_sig["score_bull"])
             score_bear = int(last_sig["score_bear"])
 
-            logger.info(f"Señal — LONG={score_bull}  SHORT={score_bear}  (umbral: {args.min_score})")
-            update_state(score_bull=score_bull, score_bear=score_bear)
+            logger.info(f"Señal — LONG={score_bull}  SHORT={score_bear}  (umbral: {_eff_min_score})")
+            update_state(score_bull=score_bull, score_bear=score_bear, min_score=_eff_min_score)
             push_log(f"Vela {entry_tf} {completed_time.strftime('%H:%M')}  LONG={score_bull}  SHORT={score_bear}")
 
             # ── 8. Filtro posición abierta ────────────────────────────────
@@ -622,14 +632,14 @@ def main() -> None:
             direction: str | None = None
             active_score: int     = 0
 
-            if score_bear >= args.min_score and score_bull >= args.min_score:
+            if score_bear >= _eff_min_score and score_bull >= _eff_min_score:
                 if score_bear >= score_bull:
                     direction, active_score = "SHORT", score_bear
                 else:
                     direction, active_score = "LONG", score_bull
-            elif score_bear >= args.min_score:
+            elif score_bear >= _eff_min_score:
                 direction, active_score = "SHORT", score_bear
-            elif score_bull >= args.min_score:
+            elif score_bull >= _eff_min_score:
                 direction, active_score = "LONG", score_bull
 
             update_state(
@@ -638,7 +648,7 @@ def main() -> None:
             )
 
             if direction is None:
-                logger.info(f"Sin señal válida (LONG={score_bull}, SHORT={score_bear} < {args.min_score})")
+                logger.info(f"Sin señal válida (LONG={score_bull}, SHORT={score_bear} < {_eff_min_score})")
                 time.sleep(args.interval)
                 continue
 
