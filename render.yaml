@@ -2,8 +2,8 @@ services:
   - type: web
     name: smc-ftmo-dashboard
     env: python
-    buildCommand: pip install -r cloud/requirements.txt
-    startCommand: uvicorn cloud.app:app --host 0.0.0.0 --port $PORT
+    buildCommand: pip install --upgrade pip && pip install -r cloud/requirements.txt
+    startCommand: gunicorn cloud.app:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 1
     envVars:
       - key: PUSH_TOKEN
         generateValue: true

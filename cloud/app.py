@@ -67,6 +67,11 @@ _state: dict[str, Any] = {
 
 # ── Endpoints ──────────────────────────────────────────────────────────────────
 
+@app.get("/health")
+async def health() -> JSONResponse:
+    return JSONResponse({"ok": True})
+
+
 @app.post("/push")
 async def push_state(request: Request) -> JSONResponse:
     """El bot local envía su estado aquí en cada ciclo."""

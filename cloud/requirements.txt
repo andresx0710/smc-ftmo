@@ -1,3 +1,5 @@
-fastapi>=0.100.0,<0.200.0
-uvicorn[standard]>=0.20.0
-cryptography>=41.0.0
+fastapi==0.111.0
+uvicorn==0.30.1
+gunicorn==22.0.0
+python-multipart==0.0.9
+cryptography==42.0.8
