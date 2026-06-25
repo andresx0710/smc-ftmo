@@ -9,5 +9,6 @@ services:
         generateValue: true
       - key: ACCESS_TOKEN
         generateValue: true
-      - key: SECRET_KEY
-        value: ""
+      # SECRET_KEY (opcional) — cifra contraseñas en BD
+      # Genera: python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+      # Pégalo manualmente en Environment → Add env var

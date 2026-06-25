@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
 from cloud.db import (
     load_config, save_config, config_exists,
-    backend_name, encryption_active, _fernet,
+    backend_name, encryption_active,
 )
 
 # ── Configuración ──────────────────────────────────────────────────────────────
