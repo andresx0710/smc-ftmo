@@ -28,8 +28,9 @@ try:
     _sk = os.environ.get("SECRET_KEY", "").strip()
     if _sk:
         _fernet = Fernet(_sk.encode())
-except ImportError:
-    pass   # cryptography no instalado → sin cifrado
+except Exception:
+    # ImportError si cryptography no está, ValueError/binascii.Error si la clave es inválida
+    _fernet = None   # cryptography no instalado → sin cifrado
 
 _SENSITIVE = {"mt5_password", "tg_token"}
 
@@ -103,10 +104,7 @@ def _dict_to_row(cfg: dict) -> dict:
 
 # ── Backend SQLite ─────────────────────────────────────────────────────────────
 
-_DB_PATH = os.environ.get(
-    "DB_PATH",
-    "/data/config.db" if os.path.isdir("/data") else "config.db",
-)
+_DB_PATH = os.environ.get("DB_PATH", "config.db")
 
 _CREATE_TABLE = """
 CREATE TABLE IF NOT EXISTS bot_config (
