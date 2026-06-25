@@ -10,3 +10,4 @@ pydantic-settings
 telebot
 pandas
 httpx
+MetaTrader5
