@@ -96,6 +96,43 @@ async def get_state(key: str = Query(default="")) -> JSONResponse:
     return JSONResponse(_state)
 
 
+@app.post("/webhook")
+async def tradingview_webhook(request: Request) -> JSONResponse:
+    """Recibe alertas webhook de TradingView con señales SMC.
+
+    TradingView envía el payload JSON generado por smc_dashboard_webhook.pine:
+      {"dir":"LONG","score":5,"prob":77,"sym":"EURUSD","tf":"5",...}
+
+    Lo almacenamos en el estado para mostrarlo en el dashboard.
+    No autentica (TradingView no soporta headers custom en webhooks gratuitos).
+    """
+    try:
+        body = await request.body()
+        # TradingView a veces envía JSON, a veces texto plano — intentamos ambos
+        try:
+            data = json.loads(body)
+        except Exception:
+            # Texto plano: intentar parsear manualmente
+            text = body.decode("utf-8", errors="replace").strip()
+            data = {"dir": "LONG" if "LONG" in text.upper() else "SHORT", "raw": text}
+
+        data["received_at"] = datetime.now(timezone.utc).strftime("%H:%M:%S UTC")
+
+        _state["tv_signal"] = {
+                "dir":   data.get("dir", "?"),
+                "score": data.get("score"),
+                "prob":  data.get("prob"),
+                "sym":   data.get("sym", "?"),
+                "tf":    data.get("tf", "?"),
+                "time":  data.get("received_at", ""),
+                "conds": {k: data.get(k) for k in ["c1","c2","c3","c4","c5","c6","c7"]},
+            }
+
+        return JSONResponse({"ok": True, "dir": data.get("dir"), "score": data.get("score")})
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+
 @app.get("/config")
 async def get_config(request: Request) -> JSONResponse:
     """El bot local llama aquí al arrancar para obtener su configuración completa."""

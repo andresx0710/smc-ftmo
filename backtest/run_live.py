@@ -617,8 +617,30 @@ def main() -> None:
             score_bull = int(last_sig["score_bull"])
             score_bear = int(last_sig["score_bear"])
 
+            # Condiciones individuales C1-C7 para el dashboard
+            def _b(key: str, side: str) -> bool:
+                col = f"{key}_{side}"
+                return bool(last_sig.get(col, False))
+
+            conds_bull = {
+                "choch": _b("choch", "bull"), "ob":  _b("ob",  "bull"),
+                "liq":   _b("liq",   "bull"), "fvg": _b("fvg", "bull"),
+                "pd":    _b("pd",    "bull"), "bos": _b("bos", "bull"),
+                "sd":    _b("sd",    "bull"),
+            }
+            conds_bear = {
+                "choch": _b("choch", "bear"), "ob":  _b("ob",  "bear"),
+                "liq":   _b("liq",   "bear"), "fvg": _b("fvg", "bear"),
+                "pd":    _b("pd",    "bear"), "bos": _b("bos", "bear"),
+                "sd":    _b("sd",    "bear"),
+            }
+
             logger.info(f"Señal — LONG={score_bull}  SHORT={score_bear}  (umbral: {_eff_min_score})")
-            update_state(score_bull=score_bull, score_bear=score_bear, min_score=_eff_min_score)
+            update_state(
+                score_bull=score_bull, score_bear=score_bear,
+                min_score=_eff_min_score,
+                conds_bull=conds_bull, conds_bear=conds_bear,
+            )
             push_log(f"Vela {entry_tf} {completed_time.strftime('%H:%M')}  LONG={score_bull}  SHORT={score_bear}")
 
             # ── 8. Filtro posición abierta ────────────────────────────────

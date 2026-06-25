@@ -47,6 +47,9 @@ _state: dict[str, Any] = {
     "score_bear":      0,
     "min_score":       5,
     "last_signal_dir": None,
+    "conds_bull":      {"choch":False,"ob":False,"liq":False,"fvg":False,"pd":False,"bos":False,"sd":False},
+    "conds_bear":      {"choch":False,"ob":False,"liq":False,"fvg":False,"pd":False,"bos":False,"sd":False},
+    "tv_signal":       None,   # última señal recibida por webhook de TradingView
     "cycle":           0,
     "last_update":     None,
     "dry_run":         False,
@@ -312,6 +315,69 @@ body::before{
 .imain{font-size:.875rem;font-weight:600;transition:color .4s}
 .isub{font-size:.71rem;color:var(--t2);margin-top:.18rem}
 
+/* ── PROBABILITY SECTION ── */
+.prob-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:1rem;margin-bottom:1rem}
+@media(max-width:900px){.prob-row{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.prob-row{grid-template-columns:1fr}}
+.prob-card{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);
+  padding:1.25rem 1.4rem;transition:transform .4s var(--sp),box-shadow .3s var(--ease),border-color .3s;cursor:default}
+.prob-card:hover{transform:translateY(-4px);box-shadow:0 16px 48px rgba(0,0,0,.45);border-color:var(--br2)}
+.prob-hdr{display:flex;justify-content:space-between;align-items:center;margin-bottom:1rem}
+.prob-ttl{font-size:.65rem;color:var(--t3);text-transform:uppercase;letter-spacing:.12em;font-weight:500}
+.prob-live{display:flex;align-items:center;gap:.35rem;font-size:.64rem;color:var(--t3);font-family:var(--mono)}
+.pulse-dot{width:5px;height:5px;border-radius:50%;background:var(--gr);animation:pd 1.5s ease-in-out infinite}
+/* Arc gauge */
+.arc-wrap{display:flex;justify-content:center;align-items:center;margin-bottom:1rem;position:relative}
+.arc-svg{overflow:visible}
+.arc-bg{fill:none;stroke:rgba(255,255,255,.06);stroke-linecap:round}
+.arc-fill-b{fill:none;stroke:var(--gr);stroke-linecap:round;
+  transition:stroke-dashoffset 1s cubic-bezier(.16,1,.3,1),stroke .5s}
+.arc-fill-s{fill:none;stroke:var(--rd);stroke-linecap:round;
+  transition:stroke-dashoffset 1s cubic-bezier(.16,1,.3,1),stroke .5s}
+.arc-center{position:absolute;text-align:center;pointer-events:none}
+.arc-pct{font-size:2rem;font-weight:800;font-family:var(--mono);letter-spacing:-.05em;line-height:1}
+.arc-lbl{font-size:.62rem;color:var(--t3);text-transform:uppercase;letter-spacing:.1em;margin-top:.2rem}
+.arc-dir{font-size:.68rem;font-weight:700;letter-spacing:.08em;margin-top:.3rem}
+.arc-bull{color:var(--gr)}.arc-bear{color:var(--rd)}.arc-neu{color:var(--t3)}
+/* Condition breakdown */
+.cond-grid{display:flex;flex-direction:column;gap:.45rem}
+.cond-row{display:flex;align-items:center;justify-content:space-between;
+  padding:.32rem .6rem;border-radius:var(--r3);
+  transition:background .3s var(--ease),transform .25s var(--sp)}
+.cond-row.on{background:rgba(48,209,88,.07)}
+.cond-row.on-s{background:rgba(255,69,58,.07)}
+.cond-row:hover{transform:translateX(2px)}
+.cond-l{display:flex;align-items:center;gap:.55rem}
+.cond-icon{font-size:.85rem;width:1.1rem;text-align:center;flex-shrink:0}
+.cond-name{font-size:.8rem;font-weight:500}
+.cond-name-sub{font-size:.64rem;color:var(--t3);margin-left:.3rem}
+.cond-badge{font-size:.65rem;font-weight:700;padding:.1rem .42rem;
+  border-radius:6px;font-family:var(--mono);transition:all .35s var(--ease)}
+.cb-on-b{background:var(--gr2);color:var(--gr);box-shadow:0 0 8px rgba(48,209,88,.2)}
+.cb-on-s{background:var(--rd2);color:var(--rd);box-shadow:0 0 8px rgba(255,69,58,.2)}
+.cb-off{background:rgba(255,255,255,.04);color:var(--t4)}
+.cond-weight{font-size:.6rem;color:var(--t4);text-transform:uppercase;letter-spacing:.08em}
+/* Countdown */
+.cdown-row{display:flex;align-items:center;gap:.6rem;
+  padding:.55rem .6rem;border-radius:var(--r3);background:rgba(255,255,255,.03);margin-top:.5rem}
+.cdown-lbl{font-size:.66rem;color:var(--t3)}
+.cdown-val{font-size:.85rem;font-weight:700;font-family:var(--mono);
+  color:var(--t1);min-width:3rem;transition:color .3s}
+.cdown-bar{flex:1;height:3px;background:rgba(255,255,255,.06);border-radius:9999px;overflow:hidden}
+.cdown-fill{height:100%;background:var(--bl);border-radius:9999px;
+  transition:width .9s linear,background .3s}
+/* TradingView */
+.tv-card{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);
+  overflow:hidden;margin-bottom:1rem;
+  transition:transform .4s var(--sp),box-shadow .3s var(--ease)}
+.tv-card:hover{transform:translateY(-3px);box-shadow:0 16px 48px rgba(0,0,0,.45)}
+.tv-hdr{display:flex;justify-content:space-between;align-items:center;
+  padding:.85rem 1.4rem;border-bottom:1px solid var(--br)}
+.tv-ttl{font-size:.65rem;color:var(--t3);text-transform:uppercase;letter-spacing:.12em;font-weight:500}
+.tv-sym{font-family:var(--mono);font-size:.72rem;color:var(--t1);font-weight:600}
+.tv-signal-banner{display:none;background:rgba(10,132,255,.1);border-bottom:1px solid rgba(10,132,255,.2);
+  padding:.6rem 1.4rem;font-size:.75rem;color:var(--bl);font-weight:600}
+.tv-signal-banner.show{display:flex;align-items:center;gap:.5rem}
 /* ── SIGNAL PANEL ── */
 .sig-card{background:var(--c1);border:1px solid var(--br);border-radius:var(--r);
   padding:1.3rem 1.5rem;margin-bottom:1rem;
@@ -631,6 +697,118 @@ input[type=range]::-moz-range-thumb{
   </div>
 </div>
 
+<!-- PROBABILITY + CONDITIONS + TV -->
+<div class="prob-row">
+
+  <!-- Bull probability arc -->
+  <div class="prob-card">
+    <div class="prob-hdr">
+      <span class="prob-ttl">Prob. alcista ▲</span>
+      <span class="prob-live"><span class="pulse-dot"></span>live</span>
+    </div>
+    <div class="arc-wrap" style="height:110px">
+      <svg class="arc-svg" width="130" height="110" viewBox="-65 -65 130 90">
+        <path class="arc-bg" d="M -50 0 A 50 50 0 0 1 50 0" stroke-width="7"/>
+        <path class="arc-fill-b" id="arc-bull" d="M -50 0 A 50 50 0 0 1 50 0" stroke-width="7"
+          stroke-dasharray="157" stroke-dashoffset="157"/>
+      </svg>
+      <div class="arc-center">
+        <div class="arc-pct arc-bull" id="prob-bull-pct">0%</div>
+        <div class="arc-lbl">LONG</div>
+      </div>
+    </div>
+    <div class="cond-grid" id="conds-bull"></div>
+  </div>
+
+  <!-- Bear probability arc -->
+  <div class="prob-card">
+    <div class="prob-hdr">
+      <span class="prob-ttl">Prob. bajista ▼</span>
+      <span class="prob-live"><span class="pulse-dot" style="background:var(--rd)"></span>live</span>
+    </div>
+    <div class="arc-wrap" style="height:110px">
+      <svg class="arc-svg" width="130" height="110" viewBox="-65 -65 130 90">
+        <path class="arc-bg" d="M -50 0 A 50 50 0 0 1 50 0" stroke-width="7"/>
+        <path class="arc-fill-s" id="arc-bear" d="M -50 0 A 50 50 0 0 1 50 0" stroke-width="7"
+          stroke-dasharray="157" stroke-dashoffset="157"/>
+      </svg>
+      <div class="arc-center">
+        <div class="arc-pct arc-bear" id="prob-bear-pct">0%</div>
+        <div class="arc-lbl">SHORT</div>
+      </div>
+    </div>
+    <div class="cond-grid" id="conds-bear"></div>
+  </div>
+
+  <!-- Countdown + TV signal -->
+  <div class="prob-card" style="display:flex;flex-direction:column;gap:.75rem">
+    <div class="prob-hdr">
+      <span class="prob-ttl">Próxima vela M5</span>
+    </div>
+    <div style="text-align:center;padding:.5rem 0">
+      <div style="font-size:2.8rem;font-weight:800;font-family:var(--mono);letter-spacing:-.04em;color:var(--t1)" id="cd-display">5:00</div>
+      <div style="font-size:.66rem;color:var(--t3);margin-top:.3rem">hasta próxima señal</div>
+    </div>
+    <div class="cdown-bar"><div class="cdown-fill" id="cd-fill" style="width:0%"></div></div>
+    <div style="border-top:1px solid var(--br);padding-top:.75rem">
+      <div class="prob-ttl" style="margin-bottom:.5rem">TradingView</div>
+      <div id="tv-signal-box" style="background:rgba(255,255,255,.03);border:1px solid var(--br);
+        border-radius:var(--r3);padding:.6rem .8rem;font-size:.75rem;color:var(--t3);
+        font-family:var(--mono);min-height:2.5rem;transition:all .4s var(--ease)">
+        Sin señal recibida
+      </div>
+      <div style="font-size:.62rem;color:var(--t4);margin-top:.4rem">
+        Webhook: <code style="color:var(--bl);font-size:.62rem">/webhook</code>
+      </div>
+    </div>
+    <div style="border-top:1px solid var(--br);padding-top:.75rem">
+      <div class="prob-ttl" style="margin-bottom:.4rem">Dirección dominante</div>
+      <div id="dominant-dir" style="font-size:1.3rem;font-weight:800;font-family:var(--mono);
+        text-align:center;padding:.5rem 0;transition:all .5s var(--sp)">—</div>
+    </div>
+  </div>
+</div>
+
+<!-- TRADINGVIEW WIDGET -->
+<div class="tv-card">
+  <div class="tv-hdr">
+    <span class="tv-ttl">Gráfico en vivo — TradingView</span>
+    <span class="tv-sym" id="tv-sym-lbl">EURUSD · M5</span>
+  </div>
+  <div id="tv-signal-banner" class="tv-signal-banner"></div>
+  <div class="tradingview-widget-container" style="height:420px">
+    <div id="tradingview_chart" style="height:100%"></div>
+    <script type="text/javascript" src="https://s3.tradingview.com/tv.js"></script>
+    <script type="text/javascript">
+    (function(){
+      if(typeof TradingView==='undefined')return;
+      new TradingView.widget({
+        autosize:true,
+        symbol:"FX:EURUSD",
+        interval:"5",
+        timezone:"Europe/Madrid",
+        theme:"dark",
+        style:"1",
+        locale:"es",
+        toolbar_bg:"#000000",
+        enable_publishing:false,
+        hide_side_toolbar:false,
+        allow_symbol_change:true,
+        container_id:"tradingview_chart",
+        backgroundColor:"rgba(0,0,0,1)",
+        gridColor:"rgba(255,255,255,0.04)",
+        studies:["STD;RSI","STD;MACD"],
+        show_popup_button:true,
+        popup_width:"1000",
+        popup_height:"650",
+        withdateranges:true,
+        save_image:false,
+      });
+    })();
+    </script>
+  </div>
+</div>
+
 <!-- POSITIONS -->
 <div class="tbl-card">
   <div class="tbl-hdr"><span class="tbl-ttl">Posiciones abiertas</span><span class="tbl-n" id="pos-c">0</span></div>
@@ -884,6 +1062,70 @@ const pnlChart=new Chart(pnlCtx,{
   }
 });
 
+// ── Countdown M5 ─────────────────────────────────────────────────────────────
+(function cdLoop(){
+  const now=new Date();
+  const s=now.getUTCSeconds(),ms=now.getUTCMilliseconds();
+  const elapsed=(now.getUTCMinutes()%5)*60+s+ms/1000;
+  const total=300,rem=total-elapsed;
+  const m=Math.floor(rem/60),sec=Math.floor(rem%60);
+  const disp=$('cd-display');
+  if(disp) disp.textContent=m+':'+(sec<10?'0':'')+sec;
+  const fill=$('cd-fill');
+  if(fill){
+    const pct=(elapsed/total)*100;
+    fill.style.width=pct+'%';
+    fill.style.background=pct>80?'var(--rd)':pct>60?'var(--am)':'var(--bl)';
+  }
+  requestAnimationFrame(cdLoop);
+})();
+
+// ── Probability helpers ───────────────────────────────────────────────────────
+// Weighted score: CHoCH/OB/Liq = 3pt each (HIGH), FVG/PD/BOS/SD = 1pt each (MEDIUM)
+const COND_CFG=[
+  {key:'choch',icon:'🔄',name:'CHoCH',sub:'Cambio de carácter',  weight:3,label:'ALTO'},
+  {key:'ob',   icon:'📦',name:'OB',   sub:'Order Block',          weight:3,label:'ALTO'},
+  {key:'liq',  icon:'💧',name:'Liq',  sub:'Barrido de liquidez',  weight:3,label:'ALTO'},
+  {key:'fvg',  icon:'🕳',name:'FVG',  sub:'Fair Value Gap',       weight:1,label:'MED'},
+  {key:'pd',   icon:'⚖️',name:'P/D',  sub:'Premium / Descuento',  weight:1,label:'MED'},
+  {key:'bos',  icon:'💥',name:'BOS',  sub:'Break of Structure',   weight:1,label:'MED'},
+  {key:'sd',   icon:'🏭',name:'S&D',  sub:'Supply & Demand',      weight:1,label:'MED'},
+];
+const MAX_W=COND_CFG.reduce((a,c)=>a+c.weight,0); // 13
+
+function calcProb(conds){
+  if(!conds)return 0;
+  const w=COND_CFG.reduce((a,c)=>a+(conds[c.key]?c.weight:0),0);
+  return Math.round((w/MAX_W)*100);
+}
+
+function setArc(id,pct,isB){
+  const el=$(id);if(!el)return;
+  const circ=157;
+  const offset=circ-(circ*pct/100);
+  el.style.strokeDashoffset=offset;
+  el.style.stroke=isB?'var(--gr)':'var(--rd)';
+}
+
+function renderConds(containerId,conds,side){
+  const el=$(containerId);if(!el||!conds)return;
+  el.innerHTML=COND_CFG.map(c=>{
+    const on=!!conds[c.key];
+    const cls=on?(side==='bull'?'on':'on-s'):'';
+    const bc=on?(side==='bull'?'cb-on-b':'cb-on-s'):'cb-off';
+    return`<div class="cond-row ${cls}">
+      <div class="cond-l">
+        <span class="cond-icon">${c.icon}</span>
+        <span class="cond-name">${c.name}<span class="cond-name-sub">${c.sub}</span></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:.4rem">
+        <span class="cond-weight">${c.label}</span>
+        <span class="cond-badge ${bc}">${on?'✓':'—'}</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function setPill(cls,txt){$('pill').className='pill '+cls;$('pill-txt').textContent=txt;}
 function setDots(id,score,cls){
@@ -992,6 +1234,40 @@ async function refresh(){
   if(s.last_signal_dir==='LONG')      {sb.textContent='▲ LONG activa'; sb.className='sig-badge sl-long';}
   else if(s.last_signal_dir==='SHORT'){sb.textContent='▼ SHORT activa';sb.className='sig-badge sl-short';}
   else                                 {sb.textContent='Sin señal';     sb.className='sig-badge sl-none';}
+
+  // ── Probabilities & conditions ──────────────────────────────────────────
+  const cb=s.conds_bull||{},cs=s.conds_bear||{};
+  const pb=calcProb(cb),ps=calcProb(cs);
+  // Arc gauges
+  setArc('arc-bull',pb,true);
+  setArc('arc-bear',ps,false);
+  // Percentage text with animation
+  animN('prob-bull-pct',pb,v=>Math.round(v)+'%');
+  animN('prob-bear-pct',ps,v=>Math.round(v)+'%');
+  // Color pct label
+  $('prob-bull-pct').style.color=pb>=70?'var(--gr)':pb>=40?'var(--am)':'var(--t3)';
+  $('prob-bear-pct').style.color=ps>=70?'var(--rd)':ps>=40?'var(--am)':'var(--t3)';
+  // Condition breakdown
+  renderConds('conds-bull',cb,'bull');
+  renderConds('conds-bear',cs,'bear');
+  // Dominant direction
+  const dd=$('dominant-dir');
+  if(pb>ps&&pb>=50){dd.textContent='▲ LONG';dd.style.color='var(--gr)';}
+  else if(ps>pb&&ps>=50){dd.textContent='▼ SHORT';dd.style.color='var(--rd)';}
+  else{dd.textContent='NEUTRAL';dd.style.color='var(--t3)';}
+  // TradingView signal banner
+  const tvSig=s.tv_signal;
+  const tvBox=$('tv-signal-box');
+  if(tvSig&&tvBox){
+    tvBox.textContent='📡 '+tvSig.dir+(tvSig.score?' (score: '+tvSig.score+')':'')+(tvSig.time?' · '+tvSig.time:'');
+    tvBox.style.color=tvSig.dir==='LONG'?'var(--gr)':'var(--rd)';
+    tvBox.style.background=tvSig.dir==='LONG'?'rgba(48,209,88,.07)':'rgba(255,69,58,.07)';
+    tvBox.style.borderColor=tvSig.dir==='LONG'?'rgba(48,209,88,.2)':'rgba(255,69,58,.2)';
+    const tvb=$('tv-signal-banner');
+    if(tvb){tvb.textContent='📡 Señal TradingView: '+tvSig.dir+' recibida';tvb.classList.add('show');}
+  }
+  // Update TV widget symbol
+  const tvsl=$('tv-sym-lbl');if(tvsl)tvsl.textContent=(s.symbol||'EURUSD')+' · M5';
 
   // Positions table
   const pos=s.open_positions||[];

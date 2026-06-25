@@ -1,0 +1,252 @@
+//@version=5
+indicator("SMC·FTMO — Dashboard + Webhook", overlay=true, max_bars_back=500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SMC·FTMO — Indicador de confluencia con probabilidades y webhook al bot
+//
+// Muestra exactamente las mismas 7 condiciones C1-C7 que calcula el bot Python.
+// Envía alertas webhook a tu servidor cloud cuando score >= umbral.
+//
+// SETUP:
+//   1. Añade el indicador en TradingView (EURUSD, M5)
+//   2. Crea una alerta → condición "Señal LONG/SHORT" → Webhook URL:
+//      https://smc-ftmo-1.onrender.com/webhook
+//   3. Payload: {{strategy.order.comment}}  ← usa el JSON que genera el indicador
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── Inputs ─────────────────────────────────────────────────────────────────────
+var g_det = "Detección SMC"
+i_pivL       = input.int(5,  "Pivot Left",          minval=1, maxval=50,  group=g_det)
+i_pivR       = input.int(3,  "Pivot Right",         minval=1, maxval=50,  group=g_det)
+i_window     = input.int(10, "Ventana activa",      minval=3, maxval=100, group=g_det,
+               tooltip="Barras que una condición permanece 'activa' tras dispararse")
+i_atrLen     = input.int(14, "Período ATR",         minval=1, maxval=50,  group=g_det)
+i_obLB       = input.int(10, "OB lookback",         minval=3, maxval=50,  group=g_det)
+i_atrMult    = input.float(.8,"OB impulso (×ATR)",  minval=.1,maxval=5.0, group=g_det)
+i_pdLB       = input.int(50, "P/D lookback",        minval=10,maxval=200, group=g_det)
+i_fvgTicks   = input.int(3,  "FVG mín. ticks",     minval=1, maxval=20,  group=g_det)
+i_baseMult   = input.float(.5,"S&D base (×ATR)",    minval=.1,maxval=2.0, group=g_det)
+i_impMult    = input.float(1.5,"S&D impulso (×ATR)",minval=.5,maxval=5.0, group=g_det)
+
+var g_sig = "Señal"
+i_minScore   = input.int(5,  "Score mínimo",        minval=1, maxval=7,   group=g_sig,
+               tooltip="Número de condiciones SMC que deben confluir para generar señal")
+i_showProb   = input.bool(true,"Mostrar tabla de prob.", group=g_sig)
+i_showConds  = input.bool(true,"Mostrar desglose C1-C7", group=g_sig)
+i_webhookUrl = input.string("https://smc-ftmo-1.onrender.com/webhook", "Webhook URL", group=g_sig)
+
+var g_col = "Colores"
+i_cBull      = input.color(color.new(#30d158,0), "Alcista", group=g_col)
+i_cBear      = input.color(color.new(#ff453a,0), "Bajista", group=g_col)
+i_cHigh      = input.color(color.new(#ff9f0a,0), "Peso ALTO", group=g_col)
+i_cMed       = input.color(color.new(#0a84ff,0), "Peso MED",  group=g_col)
+
+// ── Funciones auxiliares ──────────────────────────────────────────────────────
+mintick = syminfo.mintick
+
+f_atr(len) =>
+    ta.rma(ta.tr(true), len)
+
+f_pivotHigh(lb, rb) =>
+    ph = ta.pivothigh(high, lb, rb)
+    ph
+
+f_pivotLow(lb, rb) =>
+    pl = ta.pivotlow(low, lb, rb)
+    pl
+
+f_findOB(dir, lb, atrVal) =>
+    obH = float(na)
+    obL = float(na)
+    for i = 1 to lb
+        impulse = dir == "bull"
+                  ? (close[i-1] > open[i-1] and (close[i-1] - open[i-1]) > atrVal * i_atrMult)
+                  : (close[i-1] < open[i-1] and (open[i-1] - close[i-1]) > atrVal * i_atrMult)
+        isOB = dir == "bull" ? close[i] < open[i] : close[i] > open[i]
+        if isOB and impulse
+            obH := high[i]
+            obL := low[i]
+            break
+    [obH, obL]
+
+// ── ATR y estructura ──────────────────────────────────────────────────────────
+atr = f_atr(i_atrLen)
+
+// Swing highs/lows
+ph = f_pivotHigh(i_pivL, i_pivR)
+pl = f_pivotLow(i_pivL, i_pivR)
+
+var float sh1 = na, var float sh2 = na
+var float sl1 = na, var float sl2 = na
+
+if not na(ph)
+    sh2 := sh1
+    sh1 := ph
+if not na(pl)
+    sl2 := sl1
+    sl1 := pl
+
+bullStruct = not na(sh1) and not na(sh2) and sh1 > sh2 and not na(sl1) and not na(sl2) and sl1 > sl2
+bearStruct = not na(sh1) and not na(sh2) and sh1 < sh2 and not na(sl1) and not na(sl2) and sl1 < sl2
+
+// Premium / Discount
+pdHi = ta.highest(high, i_pdLB)
+pdLo = ta.lowest(low,  i_pdLB)
+equil = (pdHi + pdLo) / 2.0
+
+// ── C1: CHoCH ─────────────────────────────────────────────────────────────────
+var int lastChochBull = 0, var int lastChochBear = 0
+if not na(sh1) and bearStruct and close[1] < sh1 and close > sh1
+    lastChochBull := bar_index
+if not na(sl1) and bullStruct and close[1] > sl1 and close < sl1
+    lastChochBear := bar_index
+c1Bull = (bar_index - lastChochBull) <= i_window
+c1Bear = (bar_index - lastChochBear) <= i_window
+
+// ── C2: Order Block ────────────────────────────────────────────────────────────
+[obBH, obBL] = f_findOB("bull", i_obLB, atr)
+[obSH, obSL] = f_findOB("bear", i_obLB, atr)
+c2Bull = not na(obBH) and close >= obBL and close <= obBH
+c2Bear = not na(obSH) and close >= obSL and close <= obSH
+
+// ── C3: Liquidity Sweep ───────────────────────────────────────────────────────
+var int lastLiqBull = 0, var int lastLiqBear = 0
+if not na(sl1) and low < sl1
+    lastLiqBull := bar_index
+if not na(sh1) and high > sh1
+    lastLiqBear := bar_index
+c3Bull = (bar_index - lastLiqBull) <= i_window
+c3Bear = (bar_index - lastLiqBear) <= i_window
+
+// ── C4: FVG ───────────────────────────────────────────────────────────────────
+var int lastFvgBull = 0, var int lastFvgBear = 0
+minGap = i_fvgTicks * mintick
+if low > high[2] and (low - high[2]) >= minGap
+    lastFvgBull := bar_index
+if high < low[2] and (low[2] - high) >= minGap
+    lastFvgBear := bar_index
+c4Bull = (bar_index - lastFvgBull) <= i_window
+c4Bear = (bar_index - lastFvgBear) <= i_window
+
+// ── C5: Premium / Discount ────────────────────────────────────────────────────
+c5Bull = close < equil   // descuento → alcista
+c5Bear = close > equil   // premium  → bajista
+
+// ── C6: BOS ───────────────────────────────────────────────────────────────────
+var int lastBosBull = 0, var int lastBosBear = 0
+if not na(sh1) and close[1] < sh1 and close > sh1
+    lastBosBull := bar_index
+if not na(sl1) and close[1] > sl1 and close < sl1
+    lastBosBear := bar_index
+c6Bull = (bar_index - lastBosBull) <= i_window
+c6Bear = (bar_index - lastBosBear) <= i_window
+
+// ── C7: Supply & Demand ───────────────────────────────────────────────────────
+var int lastSdBull = 0, var int lastSdBear = 0
+bodyPrev = math.abs(close[1] - open[1])
+bodyCurr = math.abs(close - open)
+isBase   = bodyPrev < atr * i_baseMult
+if isBase and close > open and bodyCurr > atr * i_impMult
+    lastSdBull := bar_index
+if isBase and close < open and bodyCurr > atr * i_impMult
+    lastSdBear := bar_index
+c7Bull = (bar_index - lastSdBull) <= i_window
+c7Bear = (bar_index - lastSdBear) <= i_window
+
+// ── Scores ────────────────────────────────────────────────────────────────────
+scoreBull = (c1Bull?1:0)+(c2Bull?1:0)+(c3Bull?1:0)+(c4Bull?1:0)+(c5Bull?1:0)+(c6Bull?1:0)+(c7Bull?1:0)
+scoreBear = (c1Bear?1:0)+(c2Bear?1:0)+(c3Bear?1:0)+(c4Bear?1:0)+(c5Bear?1:0)+(c6Bear?1:0)+(c7Bear?1:0)
+
+// ── Weighted probability (HIGH=3pts, MED=1pt, max=13) ────────────────────────
+wBull = (c1Bull?3:0)+(c2Bull?3:0)+(c3Bull?3:0)+(c4Bull?1:0)+(c5Bull?1:0)+(c6Bull?1:0)+(c7Bull?1:0)
+wBear = (c1Bear?3:0)+(c2Bear?3:0)+(c3Bear?3:0)+(c4Bear?1:0)+(c5Bear?1:0)+(c6Bear?1:0)+(c7Bear?1:0)
+maxW  = 13
+probBull = math.round(wBull / maxW * 100)
+probBear = math.round(wBear / maxW * 100)
+
+// ── Señales ───────────────────────────────────────────────────────────────────
+sigLong  = scoreBull >= i_minScore and scoreBull > scoreBear
+sigShort = scoreBear >= i_minScore and scoreBear > scoreBull
+
+// ── Plots señales ─────────────────────────────────────────────────────────────
+plotshape(sigLong  and not sigLong[1],  "▲ LONG",  shape.labelup,   location.belowbar,
+          i_cBull, text="▲", textcolor=color.white, size=size.normal)
+plotshape(sigShort and not sigShort[1], "▼ SHORT", shape.labeldown, location.abovebar,
+          i_cBear, text="▼", textcolor=color.white, size=size.normal)
+
+// Swing levels
+plot(sh1, "SH1", color.new(i_cBear, 70), 1, plot.style_stepline)
+plot(sl1, "SL1", color.new(i_cBull, 70), 1, plot.style_stepline)
+plot(equil, "Equilibrio P/D", color.new(color.white, 80), 1, plot.style_linebr)
+
+// OB zones
+// (solo dibuja si hay OB activo)
+obBullColor = color.new(i_cBull, 88)
+obBearColor = color.new(i_cBear, 88)
+bgcolor(c2Bull ? obBullColor : na, title="OB alcista")
+bgcolor(c2Bear ? obBearColor : na, title="OB bajista")
+
+// ── Tabla de probabilidades ───────────────────────────────────────────────────
+if i_showProb and barstate.islast
+    tbl = table.new(position.top_right, 2, 4, border_color=color.new(color.white,85), border_width=1)
+
+    // Header
+    table.cell(tbl,0,0,"SMC·FTMO", text_color=color.white,          bgcolor=color.new(color.black,20), text_size=size.small)
+    table.cell(tbl,1,0,"PROB",     text_color=color.new(color.white,50), bgcolor=color.new(color.black,20), text_size=size.small)
+
+    // LONG row
+    longBg  = scoreBull>=i_minScore ? color.new(i_cBull,80) : color.new(color.black,60)
+    longTxt = scoreBull>=i_minScore ? i_cBull : color.new(color.white,40)
+    table.cell(tbl,0,1,"▲ LONG  "+str.tostring(scoreBull)+"/7", text_color=longTxt, bgcolor=longBg, text_size=size.small)
+    table.cell(tbl,1,1,str.tostring(probBull)+"%",               text_color=longTxt, bgcolor=longBg, text_size=size.small)
+
+    // SHORT row
+    shortBg  = scoreBear>=i_minScore ? color.new(i_cBear,80) : color.new(color.black,60)
+    shortTxt = scoreBear>=i_minScore ? i_cBear : color.new(color.white,40)
+    table.cell(tbl,0,2,"▼ SHORT "+str.tostring(scoreBear)+"/7", text_color=shortTxt, bgcolor=shortBg, text_size=size.small)
+    table.cell(tbl,1,2,str.tostring(probBear)+"%",               text_color=shortTxt, bgcolor=shortBg, text_size=size.small)
+
+    // Status
+    domDir  = probBull>probBear and probBull>=50 ? "▲ LONG" : probBear>probBull and probBear>=50 ? "▼ SHORT" : "NEUTRAL"
+    domCol  = probBull>probBear ? i_cBull : probBear>probBull ? i_cBear : color.new(color.white,50)
+    table.cell(tbl,0,3,domDir,          text_color=domCol, bgcolor=color.new(color.black,60), text_size=size.tiny)
+    table.cell(tbl,1,3,"score≥"+str.tostring(i_minScore), text_color=color.new(color.white,50), bgcolor=color.new(color.black,60), text_size=size.tiny)
+
+// ── Tabla desglose condiciones ────────────────────────────────────────────────
+if i_showConds and barstate.islast
+    tbl2 = table.new(position.bottom_right, 4, 9,
+                     border_color=color.new(color.white,88), border_width=1)
+
+    // Header
+    table.cell(tbl2,0,0,"C#",    text_color=color.new(color.white,50), bgcolor=color.new(color.black,30), text_size=size.tiny)
+    table.cell(tbl2,1,0,"COND",  text_color=color.new(color.white,50), bgcolor=color.new(color.black,30), text_size=size.tiny)
+    table.cell(tbl2,2,0,"▲LONG", text_color=color.new(i_cBull,30),     bgcolor=color.new(color.black,30), text_size=size.tiny)
+    table.cell(tbl2,3,0,"▼SHORT",text_color=color.new(i_cBear,30),     bgcolor=color.new(color.black,30), text_size=size.tiny)
+
+    condNames  = array.from("CHoCH","OB","Liq","FVG","P/D","BOS","S&D")
+    condBulls  = array.from(c1Bull,c2Bull,c3Bull,c4Bull,c5Bull,c6Bull,c7Bull)
+    condBears  = array.from(c1Bear,c2Bear,c3Bear,c4Bear,c5Bear,c6Bear,c7Bear)
+    condWeights= array.from("ALTO","ALTO","ALTO","MED","MED","MED","MED")
+
+    for i = 0 to 6
+        row = i + 1
+        wTxt = array.get(condWeights,i)
+        wCol = wTxt=="ALTO" ? i_cHigh : i_cMed
+        bOn  = array.get(condBulls,i)
+        sOn  = array.get(condBears,i)
+        table.cell(tbl2,0,row,"C"+str.tostring(i+1), text_color=wCol, bgcolor=color.new(color.black,55), text_size=size.tiny)
+        table.cell(tbl2,1,row,array.get(condNames,i)+" ("+wTxt+")", text_color=color.new(color.white,30), bgcolor=color.new(color.black,55), text_size=size.tiny)
+        table.cell(tbl2,2,row,bOn?"✓":"—", text_color=bOn?i_cBull:color.new(color.white,70), bgcolor=bOn?color.new(i_cBull,88):color.new(color.black,55), text_size=size.tiny)
+        table.cell(tbl2,3,row,sOn?"✓":"—", text_color=sOn?i_cBear:color.new(color.white,70), bgcolor=sOn?color.new(i_cBear,88):color.new(color.black,55), text_size=size.tiny)
+
+// ── Alertas con payload JSON para webhook ─────────────────────────────────────
+// Crea la alerta en TradingView con condición "Señal LONG" o "Señal SHORT"
+// y como mensaje usa: {{strategy.order.comment}}
+// La URL webhook es: https://smc-ftmo-1.onrender.com/webhook
+
+longPayload  = '{"dir":"LONG","score":' +str.tostring(scoreBull)+',"prob":'+str.tostring(probBull)+',"sym":"'+syminfo.ticker+'","tf":"'+timeframe.period+'","c1":'+str.tostring(c1Bull)+',"c2":'+str.tostring(c2Bull)+',"c3":'+str.tostring(c3Bull)+',"c4":'+str.tostring(c4Bull)+',"c5":'+str.tostring(c5Bull)+',"c6":'+str.tostring(c6Bull)+',"c7":'+str.tostring(c7Bull)+'}'
+shortPayload = '{"dir":"SHORT","score":'+str.tostring(scoreBear)+',"prob":'+str.tostring(probBear)+',"sym":"'+syminfo.ticker+'","tf":"'+timeframe.period+'","c1":'+str.tostring(c1Bear)+',"c2":'+str.tostring(c2Bear)+',"c3":'+str.tostring(c3Bear)+',"c4":'+str.tostring(c4Bear)+',"c5":'+str.tostring(c5Bear)+',"c6":'+str.tostring(c6Bear)+',"c7":'+str.tostring(c7Bear)+'}'
+
+alertcondition(sigLong  and not sigLong[1],  "Señal LONG",  longPayload)
+alertcondition(sigShort and not sigShort[1], "Señal SHORT", shortPayload)
+alertcondition(sigLong  or  sigShort,        "Señal cualquiera", "Nueva señal SMC: " + (sigLong?"LONG":"SHORT"))
