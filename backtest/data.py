@@ -8,6 +8,7 @@ Timeframe strings:  M1 M5 M15 M30 H1 H4 D1
 """
 
 import os
+import time as _time
 from datetime import datetime
 from typing import Optional
 
@@ -48,7 +49,9 @@ def download_from_mt5(
     login: int = 0,
     password: str = "",
     server: str = "",
-    path: str = "",
+    mt5_path: str = "",      # unified name (was 'path' — kept as mt5_path everywhere)
+    retries: int = 3,
+    retry_delay: float = 1.0,
 ) -> pd.DataFrame:
     """Downloads OHLCV data from MT5 terminal.
 
@@ -56,6 +59,9 @@ def download_from_mt5(
         symbol:    MT5 symbol name, e.g. "EURUSD"
         timeframe: "M1", "M5", "M15", "M30", "H1", "H4", "D1"
         n_bars:    Number of bars to download (most recent)
+        mt5_path:  Path to MT5 terminal .exe (optional)
+        retries:   Times to retry if MT5 returns empty data
+        retry_delay: Seconds between retries (MT5 may need time to sync)
 
     Returns:
         DataFrame with columns: time, o, h, l, c, vol
@@ -66,20 +72,37 @@ def download_from_mt5(
     # Connect if credentials provided
     if login and password and server:
         kwargs: dict = {"login": login, "password": password, "server": server}
-        if path:
-            kwargs["path"] = path
+        if mt5_path:
+            kwargs["path"] = mt5_path
         if not mt5.initialize(**kwargs):
             raise ConnectionError(f"MT5 connect failed: {mt5.last_error()}")
     elif not mt5.initialize():
         raise ConnectionError(f"MT5 initialize() failed: {mt5.last_error()}")
 
-    tf = _get_tf_map().get(timeframe)
+    tf = _get_tf_map().get(timeframe.upper())
     if tf is None:
         raise ValueError(f"Unknown timeframe '{timeframe}'. Valid: {list(_get_tf_map())}")
 
-    rates = mt5.copy_rates_from_pos(symbol, tf, 0, n_bars)
+    # Ensure the symbol is loaded in the terminal (critical for D1/H1 on new connections)
+    if not mt5.symbol_select(symbol, True):
+        raise RuntimeError(f"MT5 no pudo seleccionar {symbol}: {mt5.last_error()}")
+
+    # Retry loop — MT5 can return None/empty on first call if terminal is still syncing
+    rates = None
+    last_err = None
+    for attempt in range(1, retries + 1):
+        rates = mt5.copy_rates_from_pos(symbol, tf, 0, n_bars)
+        if rates is not None and len(rates) > 0:
+            break
+        last_err = mt5.last_error()
+        if attempt < retries:
+            _time.sleep(retry_delay)
+
     if rates is None or len(rates) == 0:
-        raise RuntimeError(f"No data for {symbol} {timeframe}: {mt5.last_error()}")
+        raise RuntimeError(
+            f"MT5: sin datos para {symbol} {timeframe} tras {retries} intentos. "
+            f"Último error: {last_err}"
+        )
 
     df = pd.DataFrame(rates)
     df["time"] = pd.to_datetime(df["time"], unit="s", utc=True)
@@ -152,22 +175,7 @@ _RESAMPLE_FREQ: dict = {
 
 
 def resample_ohlcv(df: pd.DataFrame, target_tf: str) -> pd.DataFrame:
-    """Resamples an OHLCV DataFrame to a higher timeframe.
-
-    Uses standard OHLC aggregation:
-      open  = first bar open in the period
-      high  = max of all highs
-      low   = min of all lows
-      close = last bar close in the period
-      vol   = sum of all volumes
-
-    Args:
-        df:        OHLCV DataFrame with 'time' column (UTC-aware)
-        target_tf: Target timeframe string, e.g. "H4", "D1"
-
-    Returns:
-        Resampled DataFrame with same column structure.
-    """
+    """Resamples an OHLCV DataFrame to a higher timeframe."""
     freq = _RESAMPLE_FREQ.get(target_tf.upper())
     if freq is None:
         raise ValueError(f"Timeframe desconocido para resample: '{target_tf}'. "
@@ -191,7 +199,7 @@ def resample_ohlcv(df: pd.DataFrame, target_tf: str) -> pd.DataFrame:
 
 def download_multi_tf_chain(
     symbol:        str,
-    tf_chain:      list,         # ordered highest → lowest, e.g. ["D1", "H1", "M15"]
+    tf_chain:      list,
     n_bars:        int       = 5000,
     cache_dir:     str       = "backtest/data",
     force_refresh: bool      = False,
@@ -203,14 +211,12 @@ def download_multi_tf_chain(
     """Downloads (or derives) OHLCV data for every TF in a chain.
 
     Data resolution strategy (per TF):
-      1. Cached CSV  → load immediately
-      2. MT5         → download and cache
-      3. Resample    → if target TF is HIGHER than entry TF, derive from entry data
-                       (cannot go finer: M5 cannot be derived from M15)
+      1. Cached CSV  → load immediately (if not force_refresh)
+      2. MT5         → download and cache (with symbol_select + retry)
+      3. Resample    → derive from entry TF if MT5 unavailable for higher TFs
 
     Returns:
-        Dict keyed by TF string (uppercase): {"D1": df, "H4": df, "H1": df, "M15": df}
-        All HTF DataFrames are clipped to the time range of the entry (lowest) TF.
+        Dict keyed by TF string (uppercase): {"D1": df, "H1": df, "M15": df, "M5": df}
     """
     chain = [tf.upper() for tf in tf_chain]
     entry_tf    = chain[-1]
@@ -241,45 +247,48 @@ def download_multi_tf_chain(
     for tf in chain[:-1]:
         cached = os.path.join(cache_dir, f"{symbol}_{tf}.csv")
 
-        # 1. Cached CSV
+        # 1. Cached CSV (skip if force_refresh)
         if os.path.exists(cached) and not force_refresh:
             result[tf] = load_csv(cached)
             continue
 
-        # 2. MT5 download
+        # 2. MT5 download (with retry + symbol_select)
         try:
-            df_mt5 = download_from_mt5(symbol, tf, n_bars_map[tf], **kwargs_mt5)
+            df_mt5 = download_from_mt5(
+                symbol, tf, n_bars_map[tf],
+                login=login, password=password, server=server, mt5_path=mt5_path,
+            )
             save_csv(df_mt5, cached)
             result[tf] = df_mt5
             continue
-        except (ImportError, ConnectionError, RuntimeError, Exception):
-            pass
+        except Exception as exc:
+            print(f"  MT5 falló para {tf} ({exc}) → intentando resample desde {entry_tf}...")
 
-        # 3. Resample from entry TF (only if target is a HIGHER timeframe)
+        # 3. Resample from entry TF (only if target is HIGHER timeframe)
         tf_mins     = TF_MINUTES.get(tf, 0)
         entry_mins_ = TF_MINUTES.get(entry_tf, 0)
         if tf_mins > entry_mins_:
-            print(f"  MT5 no disponible para {tf} → derivando desde {entry_tf} (resample)...")
+            print(f"  Derivando {tf} desde {entry_tf} por resample "
+                  f"(MT5 no disponible para este TF)...")
             resampled = resample_ohlcv(entry_df, tf)
             save_csv(resampled, cached)
             result[tf] = resampled
             continue
 
         raise RuntimeError(
-            f"No se puede obtener {symbol} {tf}: no hay caché, MT5 no disponible, "
-            f"y {tf} ({tf_mins}min) es más fino que el entry TF {entry_tf} ({entry_mins_}min) "
-            f"— no se puede derivar por resample.\n"
-            f"  → Proporciona un CSV con: --input  o conecta MT5."
+            f"No se puede obtener {symbol} {tf}: sin caché, MT5 falló, "
+            f"y {tf} ({tf_mins}min) es más fino que el entry TF {entry_tf} ({entry_mins_}min). "
+            f"Proporciona un CSV con --input o conecta MT5."
         )
 
-    # ── Clip HTF data to entry TF time range ──────────────────────────────
-    t_min = entry_df["time"].min()
+    # ── Clip HTF data: only remove future bars beyond entry TF end ────────
+    # Keep ALL historical HTF context — the detector needs D1/H1 history
+    # to find structure (CHoCH, BOS, Order Blocks). Only discard bars
+    # that are ahead of the last M5 candle (would have incomplete OHLC).
     t_max = entry_df["time"].max()
     for tf in chain[:-1]:
         df = result[tf]
-        result[tf] = df[
-            (df["time"] >= t_min) & (df["time"] <= t_max)
-        ].reset_index(drop=True)
+        result[tf] = df[df["time"] <= t_max].reset_index(drop=True)
 
     lengths = " | ".join(f"{tf}: {len(result[tf])}" for tf in chain)
     print(f"  {lengths}")
@@ -297,11 +306,7 @@ def download_multi_tf(
     server:    str       = "",
     mt5_path:  str       = "",
 ) -> dict:
-    """Legacy wrapper for D1+H1+entry_tf chain. Use download_multi_tf_chain for new code.
-
-    Returns:
-        {"entry": df, "h1": df, "d1": df}
-    """
+    """Legacy wrapper. Use download_multi_tf_chain for new code."""
     chain_data = download_multi_tf_chain(
         symbol=symbol, tf_chain=["D1", "H1", entry_tf], n_bars=n_bars,
         cache_dir=cache_dir, force_refresh=force_refresh,
@@ -327,8 +332,6 @@ def get_ohlcv(
     1. Explicit CSV path if provided
     2. Cached CSV in cache_dir (unless force_refresh)
     3. MT5 download → saved to cache
-
-    This lets the backtest run offline once data is cached.
     """
     if csv_path:
         return load_csv(csv_path)
@@ -337,6 +340,9 @@ def get_ohlcv(
     if os.path.exists(cached) and not force_refresh:
         return load_csv(cached)
 
-    df = download_from_mt5(symbol, timeframe, n_bars, login, password, server, mt5_path)
+    df = download_from_mt5(
+        symbol, timeframe, n_bars,
+        login=login, password=password, server=server, mt5_path=mt5_path,
+    )
     save_csv(df, cached)
     return df
